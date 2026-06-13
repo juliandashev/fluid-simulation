@@ -1,0 +1,19 @@
+add_executable(fluid_simulation main.cc simulation.cc renderer.cc shader.cc)
+
+target_link_libraries(fluid_simulation PRIVATE
+    glfw
+    glad
+    glm::glm
+    OpenGL::GL
+)
+
+target_compile_definitions(fluid_simulation PRIVATE
+    SHADER_DIR="${CMAKE_SOURCE_DIR}/shaders"
+)
+
+target_compile_options(fluid_simulation PRIVATE
+    -Wall
+    -Wextra
+    -Wpedantic
+    -Werror
+)
