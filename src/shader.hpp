@@ -2,6 +2,7 @@
 
 #include <glad/gl.h>
 #include <glm/mat4x4.hpp>
+#include <glm/vec2.hpp>
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
 #include <string>
@@ -20,6 +21,7 @@ public:
     void set_vec4 (const char *name, const glm::vec4 &v) const;
     void set_mat4 (const char *name, const glm::mat4 &m) const;
     void set_int  (const char *name, int value)          const;
+    void set_vec2_array(const char *name, const glm::vec2 *data, int count) const;
 
 private:
     GLuint id_;

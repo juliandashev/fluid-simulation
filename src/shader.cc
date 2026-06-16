@@ -86,3 +86,7 @@ void Shader::set_mat4(const char* name, const glm::mat4& m) const {
 void Shader::set_int(const char* name, int value) const {
     glUniform1i(glGetUniformLocation(id_, name), value);
 }
+
+void Shader::set_vec2_array(const char* name, const glm::vec2* data, int count) const {
+    glUniform2fv(glGetUniformLocation(id_, name), count, glm::value_ptr(data[0]));
+}

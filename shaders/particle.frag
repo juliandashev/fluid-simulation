@@ -7,5 +7,5 @@ void main() {
     if (dot(coord, coord) > 0.25)
         discard;
 
-    frag_color = vec4(0.3, 0.7, 1.0, 1.0);
+    frag_color = vec4(0.0, 0.0, 0.0, 1.0);
 }

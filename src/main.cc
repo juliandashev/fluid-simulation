@@ -6,6 +6,8 @@
 #include "renderer.hpp"
 #include "simulation.hpp"
 
+#include <glm/geometric.hpp>
+
 #include <cstdlib>
 #include <vector>
 #include <iostream>
@@ -39,30 +41,23 @@ int main() {
 
     std::vector<Particle> particles;
 
-    // Draw particles in a grid
-    for (uint32_t y = 0; y < PARTICLE_GRID; y++) {
-        for (uint32_t x = 0; x < PARTICLE_GRID; x++) {
-            Particle p{};
-            p.position =
-                glm::vec2(x * PARTICLE_SPACING - (PARTICLE_GRID * PARTICLE_SPACING / 2.0f),
-                          y * PARTICLE_SPACING - (PARTICLE_GRID * PARTICLE_SPACING / 2.0f));
-            particles.push_back(p);
-        }
-    }
-
     // Scoped so Renderer's destructor runs (and frees its GL objects)
     // while the GL context still exists
     {
-        Renderer renderer(particles.size());
         Simulation sim(particles);
+        sim.create_particles(1337);
+
+        Renderer renderer(particles.size());
 
         while (!glfwWindowShouldClose(window)) {
             if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
                 glfwSetWindowShouldClose(window, GLFW_TRUE);
             }
 
-            sim.step();
-            renderer.render(particles);
+            sim.simulation_step();
+
+            renderer.draw_density_field(particles);  // background (clears the screen)
+            renderer.render(particles);              // particles on top
 
             glfwSwapBuffers(window);
             glfwPollEvents();
