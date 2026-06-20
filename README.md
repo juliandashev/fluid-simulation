@@ -28,10 +28,20 @@ a stable fallback while the full SPH pressure solve is dialed in.
 - A C++17 compiler (GCC or Clang)
 - CMake ≥ 3.20
 - OpenGL development libraries
-- **X11** — GLFW is configured for X11 (Wayland is disabled in `CMakeLists.txt`)
+- **TBB** — backs `std::execution::par` (parallel algorithms); linked as `TBB::tbb`
+- **X11 and/or Wayland dev headers** — GLFW builds both backends and selects one
+  at runtime (`CMakeLists.txt`)
+
+On Fedora, install everything with:
+
+```bash
+sudo dnf install tbb-devel mesa-libGL-devel \
+    wayland-devel libxkbcommon-devel wayland-protocols-devel \
+    libX11-devel libXrandr-devel libXinerama-devel libXcursor-devel libXi-devel
+```
 
 GLFW and GLM are downloaded and built automatically by CMake on first configure,
-so no manual dependency installation is needed beyond OpenGL/X11 system headers.
+so no manual dependency installation is needed beyond the system headers above.
 
 ## Building
 
