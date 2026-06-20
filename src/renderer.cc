@@ -64,9 +64,8 @@ void Renderer::draw_density_field(const std::vector<Particle>& particles) {
     }
 
     // The shader's u_positions array is capped at MAX_RENDERED_PARTICLES (see density.frag).
-    int count = positions_.size() > MAX_RENDERED_PARTICLES
-                    ? MAX_RENDERED_PARTICLES
-                    : static_cast<int>(positions_.size());
+    int count = positions_.size() > MAX_RENDERED_PARTICLES ? MAX_RENDERED_PARTICLES
+                                                           : static_cast<int>(positions_.size());
 
     density_shader_.use();
     density_shader_.set_int("u_count", count);
@@ -74,6 +73,7 @@ void Renderer::draw_density_field(const std::vector<Particle>& particles) {
     density_shader_.set_float("u_mass", MASS);
     density_shader_.set_float("u_target", TARGET_DENSITY);
     density_shader_.set_float("u_scale", DENSITY_COLOR_SCALE);
+    density_shader_.set_float("u_domain_half", DOMAIN_MAX);
     density_shader_.set_vec2_array("u_positions", positions_.data(), count);
 
     glBindVertexArray(quad_vao_);
@@ -89,6 +89,7 @@ void Renderer::render(const std::vector<Particle>& particles) {
 
     shader_.use();
     shader_.set_float("u_point_size", POINT_SIZE);
+    shader_.set_float("u_domain_half", DOMAIN_MAX);
 
     glBindVertexArray(vao_);
     glBindBuffer(GL_ARRAY_BUFFER, vbo_);
@@ -103,6 +104,7 @@ void Renderer::draw_lines(const std::vector<glm::vec2>& vertices) {
     }
 
     line_shader_.use();
+    line_shader_.set_float("u_domain_half", DOMAIN_MAX);
     glLineWidth(ARROW_THICKNESS);
 
     glBindVertexArray(line_vao_);

@@ -10,59 +10,54 @@ Simulation::Simulation(std::vector<Particle>& particles) : particles_(particles)
 void Simulation::simulation_step() {
     std::for_each(std::execution::par, particles_.begin(), particles_.end(), [this](Particle& p) {
         p.density = calculate_density(p.position);
-        p.velocity += glm::vec2(0.0f, GRAVITY) * TIME_STEP;
+        p.velocity += glm::vec2(0.0f, GRAVITY) * DT;
     });
 
     std::for_each(std::execution::par, particles_.begin(), particles_.end(), [this](Particle& p) {
-        glm::vec2 pressure_force = calculate_pressure_force(p.position);
+        glm::vec2 pressure_force = calculate_pressure_force(p);
         // a = F/m, so divide by density to get acceleration
         glm::vec2 pressure_acceleration = pressure_force / p.density;
-        p.velocity += pressure_acceleration * TIME_STEP;
+        p.velocity += pressure_acceleration * DT;
     });
 
     std::for_each(std::execution::par, particles_.begin(), particles_.end(), [this](Particle& p) {
-        p.position += p.velocity * TIME_STEP;
+        // Forward Euler integration
+        p.velocity += DT * p.force / p.density;
+        p.position += DT * p.velocity;
 
-        if (p.position.x < DOMAIN_MIN) {
-            p.position.x = DOMAIN_MIN;
-            p.velocity.x *= -BOUNCE_DAMPING;
-        } else if (p.position.x > DOMAIN_MAX) {
-            p.position.x = DOMAIN_MAX;
-            p.velocity.x *= -BOUNCE_DAMPING;
+        // Enforce boundary conditions
+        if (p.position.x < DOMAIN_MIN + EPS) {
+            p.position.x = DOMAIN_MIN + EPS;
+            p.velocity.x *= BOUNCE_DAMPING;
+        } else if (p.position.x > DOMAIN_MAX - EPS) {
+            p.position.x = DOMAIN_MAX - EPS;
+            p.velocity.x *= BOUNCE_DAMPING;
         }
 
         if (p.position.y < DOMAIN_MIN) {
             p.position.y = DOMAIN_MIN;
-            p.velocity.y *= -BOUNCE_DAMPING;
+            p.velocity.y *= BOUNCE_DAMPING;
         } else if (p.position.y > DOMAIN_MAX) {
             p.position.y = DOMAIN_MAX;
-            p.velocity.y *= -BOUNCE_DAMPING;
+            p.velocity.y *= BOUNCE_DAMPING;
         }
     });
 
-    static bool printed = false;
-    if (!printed) {
-        printed = true;
-        std::cout << "density at center: " << calculate_density(glm::vec2(0.0f, 0.0f)) << "\n";
-        std::cout << "density far away:  " << calculate_density(glm::vec2(5.0f, 5.0f)) << "\n";
+    static bool printed = true;
+    if (printed) {
+        std::cout << particles_[0].density << "\n";
+        printed = false;
     }
 }
 
-glm::vec2 Simulation::calculate_pressure_force(glm::vec2 sample_point) {
-    glm::vec2 pressure_force = glm::vec2(0, 0);
+glm::vec2 Simulation::get_random_dir() {
+    // thread_local: each TBB worker gets its own RNG so parallel calls don't race
+    static thread_local std::mt19937 rng(std::random_device{}());
+    std::uniform_real_distribution<float> angle(0.0f, 2.0f * static_cast<float>(M_PI));
 
-    for (Particle& pi : particles_) {
-        float_t dst = glm::distance(pi.position, sample_point);
-        if (dst < 1e-6f) {
-            continue;  // sample point sits on this particle: direction is undefined
-        }
-        glm::vec2 dir = (pi.position - sample_point) / dst;
-        float_t slope = smoothing_kernel_derivative(KERNEL_RADIUS, dst);
-        float_t density = pi.density;
-        pressure_force += -density_to_pressure(density) * dir * slope * MASS / density;
-    }
-
-    return pressure_force;
+    // random direction angle
+    float_t phi = angle(rng);
+    return glm::vec2(std::cos(phi), std::sin(phi));
 }
 
 float_t Simulation::density_to_pressure(float_t density) {
@@ -70,9 +65,6 @@ float_t Simulation::density_to_pressure(float_t density) {
     float_t density_error = density - TARGET_DENSITY;
     float_t pressure = density_error * PRESSURE_MULTIPLIER;
 
-    // k * (rho - rho_0) can make pressure negative when density is below target, which is
-    // physically correct: it means the fluid is under tension and will pull together rather than
-    // push apart. However, this can cause numerical instability, so we clamp it to zero.
     return pressure;
 }
 
@@ -88,11 +80,30 @@ float_t Simulation::calculate_density(glm::vec2 sample_point) {
     return density;
 }
 
+glm::vec2 Simulation::calculate_pressure_force(Particle& particle) {
+    glm::vec2 pressure_force = glm::vec2(0, 0);
+
+    for (Particle& pi : particles_) {
+        if (particle.position == pi.position) {
+            continue;
+        }
+
+        glm::vec2 offset = pi.position - particle.position;
+        float_t dst = glm::length(offset);
+        glm::vec2 dir = dst < 1e-6f ? get_random_dir() : (offset) / dst;
+
+        float_t slope = spiky_kernel_derivative(KERNEL_RADIUS, dst);
+        pressure_force += density_to_pressure(pi.density) * dir * slope * MASS / pi.density;
+    }
+
+    return pressure_force;
+}
+
 void Simulation::create_particles(uint32_t seed) {
     std::mt19937 rng(seed);
-    std::uniform_real_distribution<float> dist(-0.5f, 0.5f);
+    std::uniform_real_distribution<float_t> dist(-0.5f, 0.5f);
 
-    const float bound_size = DOMAIN_MAX - DOMAIN_MIN;  // domain is 2 units wide
+    const float_t bound_size = DOMAIN_MAX - DOMAIN_MIN;
 
     particles_.clear();
     particles_.reserve(NUM_PARTICLES);
@@ -102,15 +113,7 @@ void Simulation::create_particles(uint32_t seed) {
 
         p.position = glm::vec2(dist(rng) * bound_size, dist(rng) * bound_size);
         p.property = std::cos(p.position.y - 3.0f + std::sin(p.position.x));
-        particles_.push_back(p);
-    }
-}
 
-void Simulation::apply_pressure_force() {
-    for (Particle& pi : particles_) {
-        glm::vec2 pressure_force = calculate_pressure_force(pi.position);
-        // a = F/m, so divide by density to get acceleration
-        glm::vec2 pressure_acceleration = pressure_force / pi.density;
-        pi.velocity += pressure_acceleration * TIME_STEP;
+        particles_.push_back(p);
     }
 }
