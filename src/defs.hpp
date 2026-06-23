@@ -10,19 +10,20 @@ constexpr uint32_t NUM_PARTICLES = 100;
 
 // Rendering
 constexpr float_t POINT_SIZE = 16.0f;
-constexpr float_t DENSITY_COLOR_SCALE = 50.0f;    // maps (density - target) onto color intensity
+constexpr float_t DENSITY_COLOR_SCALE = 20.0f;    // maps (density - target) onto color intensity
 constexpr float_t ARROW_THICKNESS = 3.0f;         // gradient arrow line width (pixels)
 constexpr uint32_t MAX_RENDERED_PARTICLES = 512;  // MUST match MAX_PARTICLES in density.frag
 
 // SPH physics
 constexpr float_t KERNEL_RADIUS = 16.0f;  // h
+constexpr float_t KERNEL_RADIUS_SQ = KERNEL_RADIUS * KERNEL_RADIUS;
 constexpr float_t MASS = 1.0f;
-constexpr float_t TARGET_DENSITY = 0.017f;     // rho
-constexpr float_t PRESSURE_MULTIPLIER = 0.5f;  // k
+constexpr float_t TARGET_DENSITY = 0.01f;       // rho
+constexpr float_t PRESSURE_MULTIPLIER = 70.0f;  // k
 constexpr float_t VISCOSITY = 6.0f;
 constexpr float_t GRAVITY = 0.0f;
-constexpr float_t DT = 0.5f;   // integration time step
-constexpr float_t EPS = 4.0f;  // boundary epsilon
+constexpr float_t DT = 0.0002f;  // integration time step
+constexpr float_t EPS = 4.0f;    // boundary epsilon
 
 // Domain bounds
 constexpr float_t DOMAIN_MIN = -40.0f;

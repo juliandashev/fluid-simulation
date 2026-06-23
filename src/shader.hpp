@@ -22,6 +22,7 @@ public:
     void set_mat4 (const char *name, const glm::mat4 &m) const;
     void set_int  (const char *name, int value)          const;
     void set_vec2_array(const char *name, const glm::vec2 *data, int count) const;
+    void set_float_array(const char *name, const float *data, int count)    const;
 
 private:
     GLuint id_;

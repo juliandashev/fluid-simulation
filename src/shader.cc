@@ -90,3 +90,7 @@ void Shader::set_int(const char* name, int value) const {
 void Shader::set_vec2_array(const char* name, const glm::vec2* data, int count) const {
     glUniform2fv(glGetUniformLocation(id_, name), count, glm::value_ptr(data[0]));
 }
+
+void Shader::set_float_array(const char* name, const float* data, int count) const {
+    glUniform1fv(glGetUniformLocation(id_, name), count, data);
+}

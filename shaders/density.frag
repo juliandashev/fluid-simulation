@@ -7,6 +7,8 @@ out vec4 frag_color;
 const int MAX_PARTICLES = 512;
 
 uniform vec2 u_positions[MAX_PARTICLES];
+uniform float u_properties[MAX_PARTICLES];
+uniform float u_densities[MAX_PARTICLES];
 uniform int u_count;
 uniform float u_radius;
 uniform float u_mass;

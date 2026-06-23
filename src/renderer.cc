@@ -59,8 +59,11 @@ void Renderer::draw_density_field(const std::vector<Particle>& particles) {
     glClear(GL_COLOR_BUFFER_BIT);
 
     positions_.clear();
+    std::vector<float> props, dens;
     for (const Particle& p : particles) {
         positions_.push_back(p.position);
+        props.push_back(p.property);
+        dens.push_back(p.density);
     }
 
     // The shader's u_positions array is capped at MAX_RENDERED_PARTICLES (see density.frag).
@@ -75,6 +78,8 @@ void Renderer::draw_density_field(const std::vector<Particle>& particles) {
     density_shader_.set_float("u_scale", DENSITY_COLOR_SCALE);
     density_shader_.set_float("u_domain_half", DOMAIN_MAX);
     density_shader_.set_vec2_array("u_positions", positions_.data(), count);
+    density_shader_.set_float_array("u_properties", props.data(), count);
+    density_shader_.set_float_array("u_densities", dens.data(), count);
 
     glBindVertexArray(quad_vao_);
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);

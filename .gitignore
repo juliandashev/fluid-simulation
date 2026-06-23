@@ -73,3 +73,6 @@ bin/
 
 # local editor / tooling
 .claude/
+
+# local gnuplot visualization scripts
+*.plt

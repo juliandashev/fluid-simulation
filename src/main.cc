@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <vector>
 #include <iostream>
+#include <random>
 
 int main() {
     if (!glfwInit()) {
@@ -44,8 +45,13 @@ int main() {
     // Scoped so Renderer's destructor runs (and frees its GL objects)
     // while the GL context still exists
     {
+        std::random_device rd;
+        uint32_t seed = rd();
+
+        std::cout << "Seed: " << seed << "\n";
+
         Simulation sim(particles);
-        sim.create_particles(1337);
+        sim.create_particles(seed);
 
         Renderer renderer(particles.size());
 
