@@ -31,6 +31,7 @@ public:
 private:
     GLuint vao_ = 0;
     GLuint vbo_ = 0;
+    GLuint speed_vbo_ = 0;
     Shader shader_;
 
     GLuint line_vao_ = 0;
@@ -42,4 +43,5 @@ private:
     Shader density_shader_;
 
     std::vector<glm::vec2> positions_;  // reused staging buffer, avoids per-frame allocation
+    std::vector<float> speeds_;         // per-particle speed, uploaded alongside positions
 };

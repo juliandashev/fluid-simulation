@@ -1,4 +1,4 @@
-add_executable(fluid_simulation main.cc simulation.cc renderer.cc shader.cc)
+add_executable(fluid_simulation main.cc simulation.cc renderer.cc shader.cc spacial_grid.cc)
 
 find_package(TBB REQUIRED)
 
