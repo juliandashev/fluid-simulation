@@ -7,10 +7,11 @@ uniform float u_point_size;
 uniform float u_domain_half;
 uniform float u_max_speed;
 
-out float v_t;  // normalized speed in [0, 1]: 0 = slowest, 1 = fastest this frame
+out float v_t;  // speed / SPEED_COLOR_MAX, gamma-biased toward blue
 
 void main() {
     gl_Position = vec4(position / u_domain_half, 0.0, 1.0);
     gl_PointSize = u_point_size;
-    v_t = clamp(a_speed / u_max_speed, 0.0, 1.0);
+    float t = clamp(a_speed / u_max_speed, 0.0, 1.0);
+    v_t = pow(t, 1.5);   // exponent > 1 pushes mid-speeds toward blue
 }

@@ -70,32 +70,36 @@ int main() {
 
         Renderer renderer(particles.size());
 
-        const double_t FIXED_DT = DT;
-        const int32_t MAX_STEPS = 200;  // hard cap on catch-up steps per frame
+        // Frame calculation variables
+        double_t now = 0.0;
         double_t previous = glfwGetTime();
         double_t accumulator = 0.0;
+        double_t frame_time = 0.0;
+
+        double_t fps_timer = glfwGetTime();
+        double_t elapsed = 0;
+        double_t fps = 0;
+        int32_t frame_count = 0;
 
         while (!glfwWindowShouldClose(window)) {
             if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
                 glfwSetWindowShouldClose(window, GLFW_TRUE);
             }
 
-            double_t now = glfwGetTime();
-            accumulator += now - previous;
+            now = glfwGetTime();
+            frame_time = now - previous;
             previous = now;
 
-            int32_t steps = 0;
-            while (accumulator >= FIXED_DT && steps < MAX_STEPS) {
-                sim.simulation_step(FIXED_DT * 3);
-                accumulator -= FIXED_DT;
-                steps++;
+            if (frame_time > 0.25) {
+                frame_time = 0.25;
             }
 
-            // If we hit the cap, the renderer can't keep up at this DT. Drop the
-            // backlog instead of letting it grow forever (spiral of death)
-            // the sim runs in slow motion, but it stays alive and responsive.
-            if (steps == MAX_STEPS) {
-                accumulator = 0.0;
+            const double_t STEP = DT * 10.0;
+            accumulator += frame_time * 10.0;
+
+            while (accumulator >= STEP) {
+                sim.simulation_step(STEP);
+                accumulator -= STEP;
             }
 
             glClearColor(0.02f, 0.04f, 0.10f, 1.0f);
@@ -106,6 +110,18 @@ int main() {
 
             glfwSwapBuffers(window);
             glfwPollEvents();
+
+            frame_count++;
+            elapsed = glfwGetTime() - fps_timer;
+
+            if (elapsed >= 1.0) {
+                fps = frame_count / elapsed;
+                glfwSetWindowTitle(window, ("Fluid Simulation - " +
+                                            std::to_string(static_cast<int32_t>(fps)) + " FPS")
+                                               .c_str());
+                frame_count = 0;
+                fps_timer = glfwGetTime();
+            }
         }
     }
 

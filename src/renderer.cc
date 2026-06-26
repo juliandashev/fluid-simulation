@@ -22,8 +22,8 @@ Renderer::Renderer(size_t max_particles)
     // the VAO records "location 1 reads from speed_vbo_, one tightly-packed float".
     glGenBuffers(1, &speed_vbo_);
     glBindBuffer(GL_ARRAY_BUFFER, speed_vbo_);
-    glBufferData(GL_ARRAY_BUFFER, max_particles * sizeof(float), nullptr, GL_DYNAMIC_DRAW);
-    glVertexAttribPointer(1, 1, GL_FLOAT, GL_FALSE, sizeof(float), nullptr);
+    glBufferData(GL_ARRAY_BUFFER, max_particles * sizeof(float_t), nullptr, GL_DYNAMIC_DRAW);
+    glVertexAttribPointer(1, 1, GL_FLOAT, GL_FALSE, sizeof(float_t), nullptr);
     glEnableVertexAttribArray(1);
     glBindVertexArray(0);
 
@@ -40,14 +40,14 @@ Renderer::Renderer(size_t max_particles)
     glBindVertexArray(0);
 
     // Fullscreen quad (triangle strip) for the density-field background.
-    const float quad[] = {-1.0f, -1.0f, 1.0f, -1.0f, -1.0f, 1.0f, 1.0f, 1.0f};
+    const float_t quad[] = {-1.0f, -1.0f, 1.0f, -1.0f, -1.0f, 1.0f, 1.0f, 1.0f};
     glGenVertexArrays(1, &quad_vao_);
     glGenBuffers(1, &quad_vbo_);
 
     glBindVertexArray(quad_vao_);
     glBindBuffer(GL_ARRAY_BUFFER, quad_vbo_);
     glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_STATIC_DRAW);
-    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), nullptr);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float_t), nullptr);
     glEnableVertexAttribArray(0);
     glBindVertexArray(0);
 
@@ -71,12 +71,12 @@ void Renderer::draw_density_field(const std::vector<Particle>& particles) {
     glClear(GL_COLOR_BUFFER_BIT);
 
     positions_.clear();
-    std::vector<float> props, dens;
+    std::vector<float_t> props, dens;
 
     // Auto-range the color scale to the data, so we don't retune a fixed
     // constant every time particle count or mass changes. Seed it tiny to
     // avoid a divide-by-zero when every density happens to equal the target.
-    float max_dev = 1e-6f;
+    float_t max_dev = 1e-6f;
     for (const Particle& p : particles) {
         positions_.push_back(p.position);
         props.push_back(p.property);
@@ -85,11 +85,12 @@ void Renderer::draw_density_field(const std::vector<Particle>& particles) {
         max_dev = std::max(max_dev, std::abs(p.density - TARGET_DENSITY));
     }
 
-    float color_scale = 1.0f / max_dev;
+    float_t color_scale = 1.0f / max_dev;
 
     // The shader's u_positions array is capped at MAX_RENDERED_PARTICLES (see density.frag).
-    int count = positions_.size() > MAX_RENDERED_PARTICLES ? MAX_RENDERED_PARTICLES
-                                                           : static_cast<int>(positions_.size());
+    int32_t count = positions_.size() > MAX_RENDERED_PARTICLES
+                        ? MAX_RENDERED_PARTICLES
+                        : static_cast<int32_t>(positions_.size());
 
     density_shader_.use();
     density_shader_.set_int("u_count", count);
@@ -111,21 +112,18 @@ void Renderer::render(const std::vector<Particle>& particles) {
     positions_.clear();
     speeds_.clear();
 
-    // Auto-range the color scale to the frame's fastest particle, so the gradient
-    // always spans blue->red without a hand-tuned constant. Tiny seed avoids a
-    // divide-by-zero in the shader when every particle is at rest.
-    float max_speed = 1e-6f;
+    // Per-particle position + speed. Color keys off an absolute reference
+    // (SPEED_COLOR_MAX), so a calm fluid stays blue instead of being re-stretched
+    // across the whole palette every frame.
     for (const Particle& p : particles) {
         positions_.push_back(p.position);
-        float speed = glm::length(p.velocity);
-        speeds_.push_back(speed);
-        max_speed = std::max(max_speed, speed);
+        speeds_.push_back(glm::length(p.velocity));
     }
 
     shader_.use();
     shader_.set_float("u_point_size", POINT_SIZE);
     shader_.set_float("u_domain_half", DOMAIN_MAX);
-    shader_.set_float("u_max_speed", max_speed);
+    shader_.set_float("u_max_speed", SPEED_COLOR_MAX);
 
     glBindVertexArray(vao_);
 
@@ -133,7 +131,7 @@ void Renderer::render(const std::vector<Particle>& particles) {
     glBufferSubData(GL_ARRAY_BUFFER, 0, positions_.size() * sizeof(glm::vec2), positions_.data());
 
     glBindBuffer(GL_ARRAY_BUFFER, speed_vbo_);
-    glBufferSubData(GL_ARRAY_BUFFER, 0, speeds_.size() * sizeof(float), speeds_.data());
+    glBufferSubData(GL_ARRAY_BUFFER, 0, speeds_.size() * sizeof(float_t), speeds_.data());
 
     glDrawArrays(GL_POINTS, 0, static_cast<GLsizei>(positions_.size()));
     glBindVertexArray(0);
