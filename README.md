@@ -10,9 +10,19 @@ pressure, pressure/viscosity forces, integration, and boundary handling.
 
 ## Status
 
-Work in progress. The rendering pipeline and SPH core are in place; physics
-constants are being tuned for stability. A position-based collision pass provides
-a stable fallback while the full SPH pressure solve is dialed in.
+Work in progress, but the core is running. Particles are simulated with a
+predicted-position SPH pressure solve; neighbour queries go through a spatial
+hash grid, so cost scales roughly linearly with particle count rather than
+O(N²). The four update passes (predict, density/pressure, force, integrate) run
+in parallel via `std::execution::par`.
+
+The update is driven by a fixed-timestep accumulator with a frame-delta clamp,
+which keeps the physics deterministic and stable through frame-rate spikes.
+Particles are coloured by speed against a fixed reference (blue → red).
+
+Gravity is currently disabled, so the fluid relaxes toward its rest density and
+settles rather than falling — useful while the SPH constants (kernel radius,
+target density, stiffness, timestep) are still being tuned.
 
 ## Tech stack
 
@@ -85,6 +95,7 @@ src/
   particle.hpp     — Particle struct (position, velocity, force, density, pressure)
   simulation.hpp   — Simulation class + inline SPH kernels (poly6, spiky grad, viscosity)
   simulation.cc    — density/pressure, forces, integration, collision/boundary passes
+  spacial_grid.hpp/.cc — spatial hash grid for O(N) neighbour queries
   renderer.hpp/.cc — owns VAO/VBO/shader, uploads positions and draws each frame
   shader.hpp/.cc   — RAII OpenGL shader-program wrapper
 shaders/

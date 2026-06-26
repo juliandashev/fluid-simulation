@@ -27,8 +27,14 @@ void Simulation::simulation_step(float_t delta_time) {
     });
 
     // Apply densities and pressure forces
-    std::for_each(std::execution::par, particles_.begin(), particles_.end(),
-                  [this](Particle& p) { p.force = calculate_pressure_force(p); });
+    std::for_each(std::execution::par, particles_.begin(), particles_.end(), [this](Particle& p) {
+        p.force = calculate_pressure_force(p);
+
+        if (interaction_strength_ != 0.0f) {
+            p.force +=
+                interaction_force(p, interaction_point_, INTERACTION_RADIUS, interaction_strength_);
+        }
+    });
 
     // Update positions and resolve collisions
     std::for_each(std::execution::par, particles_.begin(), particles_.end(),
@@ -38,11 +44,11 @@ void Simulation::simulation_step(float_t delta_time) {
                       p.position += delta_time * p.velocity;
 
                       // Enforce boundary conditions
-                      if (p.position.x < DOMAIN_MIN + EPS) {
-                          p.position.x = DOMAIN_MIN + EPS;
+                      if (p.position.x < -DOMAIN_HALF_X + EPS) {
+                          p.position.x = -DOMAIN_HALF_X + EPS;
                           p.velocity.x *= BOUNCE_DAMPING;
-                      } else if (p.position.x > DOMAIN_MAX - EPS) {
-                          p.position.x = DOMAIN_MAX - EPS;
+                      } else if (p.position.x > DOMAIN_HALF_X - EPS) {
+                          p.position.x = DOMAIN_HALF_X - EPS;
                           p.velocity.x *= BOUNCE_DAMPING;
                       }
 
@@ -161,4 +167,19 @@ void Simulation::create_particles(uint32_t seed) {
     }
 
     predicted_positions_.resize(particles_.size());
+}
+
+glm::vec2 Simulation::interaction_force(const Particle& particle, glm::vec2 input_position,
+                                        float_t radius, float_t strength) {
+    glm::vec2 force(0.0f, 0.0f);
+    glm::vec2 offset = input_position - particle.position;
+    float_t dst_sq = glm::dot(offset, offset);
+
+    if (dst_sq < radius * radius) {
+        float_t dst = std::sqrt(dst_sq);
+        glm::vec2 dir = dst <= 1e-6f ? glm::vec2(0.0f) : offset / dst;
+        float_t falloff = 1.0f - dst / radius;  // 1 at center; 0 at edge
+        force = (dir * strength - particle.velocity) * falloff;
+    }
+    return force;
 }

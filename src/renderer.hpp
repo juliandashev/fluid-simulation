@@ -27,6 +27,7 @@ public:
     // Draws a flat list of vertices as GL_LINES (each pair is one segment).
     // Call after render() so the lines paint on top of the particles.
     void draw_lines(const std::vector<glm::vec2>& vertices);
+    void draw_circle(glm::vec2 center, float_t radius, glm::vec3 color);
 
 private:
     GLuint vao_ = 0;

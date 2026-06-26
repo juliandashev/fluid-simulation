@@ -42,6 +42,11 @@ class Simulation {
 public:
     explicit Simulation(std::vector<Particle>& particles);
 
+    void set_interaction(glm::vec2 point, float_t strength) {
+        interaction_point_ = point;
+        interaction_strength_ = strength;
+    }
+
     void create_particles();
     void create_particles(uint32_t seed);
     void simulation_step(float_t delta_time);
@@ -49,14 +54,19 @@ public:
 private:
     glm::vec2 calculate_pressure_force(const Particle& particle);
     glm::vec2 get_random_dir();
+    glm::vec2 interaction_force(const Particle& particle, glm::vec2 input_position, float_t radius,
+                                float_t strength);
 
     float_t calculate_density_at(const glm::vec2& sample_point);
     float_t density_to_pressure(const float_t density);
     float_t calculate_shared_pressure(const float_t density_a, const float_t density_b);
 
-    std::vector<glm::vec2> predicted_positions_;
+
     SpacialGrid grid_;
+    glm::vec2 interaction_point_{0.0f};
+    float_t interaction_strength_ = 0.0f;
 
     // Reference to the particle vector
     std::vector<Particle>& particles_;
+    std::vector<glm::vec2> predicted_positions_;
 };

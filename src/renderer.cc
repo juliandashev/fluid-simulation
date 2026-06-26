@@ -125,6 +125,12 @@ void Renderer::render(const std::vector<Particle>& particles) {
     shader_.set_float("u_domain_half", DOMAIN_MAX);
     shader_.set_float("u_max_speed", SPEED_COLOR_MAX);
 
+    // Correct for non-square windows: the viewport stretches NDC's square to the
+    // window's aspect, so divide x by w/h to keep the domain (and circles) undistorted.
+    GLint vp[4];
+    glGetIntegerv(GL_VIEWPORT, vp);
+    shader_.set_float("u_aspect", static_cast<float_t>(vp[2]) / static_cast<float_t>(vp[3]));
+
     glBindVertexArray(vao_);
 
     glBindBuffer(GL_ARRAY_BUFFER, vbo_);
@@ -144,11 +150,41 @@ void Renderer::draw_lines(const std::vector<glm::vec2>& vertices) {
 
     line_shader_.use();
     line_shader_.set_float("u_domain_half", DOMAIN_MAX);
+
+    GLint vp[4];
+    glGetIntegerv(GL_VIEWPORT, vp);
+    line_shader_.set_float("u_aspect", static_cast<float_t>(vp[2]) / static_cast<float_t>(vp[3]));
+
     glLineWidth(ARROW_THICKNESS);
 
     glBindVertexArray(line_vao_);
     glBindBuffer(GL_ARRAY_BUFFER, line_vbo_);
     glBufferSubData(GL_ARRAY_BUFFER, 0, vertices.size() * sizeof(glm::vec2), vertices.data());
     glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(vertices.size()));
+    glBindVertexArray(0);
+}
+
+void Renderer::draw_circle(glm::vec2 center, float_t radius, glm::vec3 color) {
+    positions_.clear();
+    const int32_t segments = 48;
+
+    for (int32_t i = 0; i < segments; ++i) {
+        float_t angle = 2.0f * static_cast<float_t>(M_PI) * static_cast<float_t>(i) / segments;
+        glm::vec2 point = center + radius * glm::vec2(std::cos(angle), std::sin(angle));
+        positions_.push_back(point);
+    }
+
+    line_shader_.use();
+    line_shader_.set_float("u_domain_half", DOMAIN_MAX);
+    line_shader_.set_vec3("u_color", color);
+
+    GLint vp[4];
+    glGetIntegerv(GL_VIEWPORT, vp);
+    line_shader_.set_float("u_aspect", static_cast<float_t>(vp[2]) / static_cast<float_t>(vp[3]));
+
+    glBindVertexArray(line_vao_);
+    glBindBuffer(GL_ARRAY_BUFFER, line_vbo_);
+    glBufferSubData(GL_ARRAY_BUFFER, 0, positions_.size() * sizeof(glm::vec2), positions_.data());
+    glDrawArrays(GL_LINE_LOOP, 0, static_cast<GLsizei>(positions_.size()));
     glBindVertexArray(0);
 }

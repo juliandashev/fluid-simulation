@@ -5,6 +5,7 @@
 #include "particle.hpp"
 #include "renderer.hpp"
 #include "simulation.hpp"
+#include "input.hpp"
 
 #include <glm/geometric.hpp>
 
@@ -12,6 +13,15 @@
 #include <vector>
 #include <iostream>
 #include <random>
+
+// convert pixels (top-left, y-down) to world uints
+// inverting the vertex shader's transform
+glm::vec2 screen_to_world(glm::vec2 px, int32_t w, int32_t h) {
+    float_t aspect = static_cast<float_t>(w) / h;
+    float_t ndc_x = (px.x / w) * 2.0f - 1.0f;
+    float_t ndc_y = 1.0f - (px.y / h) * 2.0f;
+    return glm::vec2(ndc_x * aspect, ndc_y) * DOMAIN_MAX;  // mirror the shader's x-correction
+}
 
 int main() {
     if (!glfwInit()) {
@@ -70,6 +80,11 @@ int main() {
 
         Renderer renderer(particles.size());
 
+        // Controlling space
+        Input input(window);
+        bool paused = false;
+        std::vector<std::vector<Particle>> history;
+
         // Frame calculation variables
         double_t now = 0.0;
         double_t previous = glfwGetTime();
@@ -86,6 +101,10 @@ int main() {
                 glfwSetWindowShouldClose(window, GLFW_TRUE);
             }
 
+            bool toggle = input.space_pressed();
+            bool step_fwd = input.right_pressed();
+            bool step_back = input.left_pressed();
+
             now = glfwGetTime();
             frame_time = now - previous;
             previous = now;
@@ -95,18 +114,61 @@ int main() {
             }
 
             const double_t STEP = DT * 10.0;
-            accumulator += frame_time * 10.0;
 
-            while (accumulator >= STEP) {
-                sim.simulation_step(STEP);
-                accumulator -= STEP;
+            if (toggle) {
+                paused = !paused;
+            }
+
+            bool interacting = input.left_mouse_held() || input.right_mouse_held();
+            glm::vec2 world(0.0f);
+
+            if (interacting) {
+                int32_t w, h;
+                glfwGetWindowSize(window, &w, &h);
+
+                world = screen_to_world(input.cursor_pixels(), w, h);
+
+                float_t strength =
+                    input.left_mouse_held() ? INTERACTION_STRENGTH : -INTERACTION_STRENGTH;
+
+                sim.set_interaction(world, strength);
+            } else {
+                sim.set_interaction(glm::vec2(0.0f), 0.0f);
+            }
+
+            if (!paused) {
+                accumulator += frame_time * 10.0;
+
+                while (accumulator >= STEP) {
+                    history.push_back(particles);
+
+                    if (history.size() > MAX_HISTORY) {
+                        history.erase(history.begin());
+                    }
+
+                    sim.simulation_step(STEP);
+                    accumulator -= STEP;
+                }
+            } else {
+                if (step_fwd) {
+                    history.push_back(particles);
+                    sim.simulation_step(STEP);
+                }
+
+                if (step_back && !history.empty()) {
+                    particles = history.back();
+                    history.pop_back();
+                }
             }
 
             glClearColor(0.02f, 0.04f, 0.10f, 1.0f);
             glClear(GL_COLOR_BUFFER_BIT);
 
-            // renderer.draw_density_field(particles);  // background (clears the screen)
-            renderer.render(particles);  // particles on top
+            renderer.render(particles);
+
+            if (interacting) {
+                renderer.draw_circle(world, INTERACTION_RADIUS, glm::vec3(1.0f, 0.2f, 0.2f));
+            }
 
             glfwSwapBuffers(window);
             glfwPollEvents();
