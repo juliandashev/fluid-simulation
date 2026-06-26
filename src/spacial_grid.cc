@@ -6,7 +6,7 @@
 #include <cstdint>
 #include <execution>
 
-void SpacialGrid::update_spacial_lookup(std::vector<glm::vec2> points, float_t radius) {
+void SpacialGrid::update_spacial_lookup(const std::vector<glm::vec2>& points, float_t radius) {
     points_ = points;
     radius_ = radius;
 
@@ -63,34 +63,4 @@ uint32_t SpacialGrid::get_key_from_hash(uint32_t hash) {
     // Fold the unbounded hash into a table slot. Collisions are possible here;
     // the dst_sq <= r_sq test in the query is what filters them out.
     return hash % static_cast<uint32_t>(spacial_lookup_.size());
-}
-
-/// @brief Invokes `callback` for every stored point within the search radius of `sample_point`.
-/// @note Walks the 3x3 block of cells around the sample and filters by squared distance,
-///       so hash collisions and corner-cell points are excluded. Uses the radius set by
-///       update_spacial_lookup -> call that first, every frame, before querying.
-/// @param sample_point World-space location to search around.
-/// @param callback Run once per in-range point, given that point's index. `return` skips to
-///        the next point (acts as continue); there is no way to break out of the search early.
-void SpacialGrid::foreach_point_within_radius(glm::vec2 sample_point,
-                                              const std::function<void(int32_t)>& callback) {
-    glm::ivec2 centre = position_to_cell_coord(sample_point, radius_);
-    float_t r_sq = radius_ * radius_;
-
-    for (const glm::ivec2& off : CELL_OFFSETS) {
-        uint32_t key = get_key_from_hash(hash_cell(centre.x + off.x, centre.y + off.y));
-        int32_t cell_start = start_indices_[key];
-
-        for (size_t i = cell_start; i < spacial_lookup_.size(); i++) {
-            // Sorted runs: once the key changes, we've walked off this bucket.
-            if (spacial_lookup_[i].cell_key != key) {
-                break;
-            }
-            int32_t particle_index = spacial_lookup_[i].particle_index;
-            glm::vec2 d = points_[particle_index] - sample_point;
-            if (glm::dot(d, d) <= r_sq) {  // filters hash collisions + corner cells
-                callback(particle_index);
-            }
-        }
-    }
 }

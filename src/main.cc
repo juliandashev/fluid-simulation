@@ -13,6 +13,7 @@
 #include <vector>
 #include <iostream>
 #include <random>
+#include <deque>
 
 // convert pixels (top-left, y-down) to world uints
 // inverting the vertex shader's transform
@@ -83,7 +84,7 @@ int main() {
         // Controlling space
         Input input(window);
         bool paused = false;
-        std::vector<std::vector<Particle>> history;
+        std::deque<std::vector<Particle>> history;
 
         // Frame calculation variables
         double_t now = 0.0;
@@ -143,7 +144,7 @@ int main() {
                     history.push_back(particles);
 
                     if (history.size() > MAX_HISTORY) {
-                        history.erase(history.begin());
+                        history.pop_front();
                     }
 
                     sim.simulation_step(STEP);

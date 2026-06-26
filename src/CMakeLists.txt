@@ -19,4 +19,8 @@ target_compile_options(fluid_simulation PRIVATE
     -Wextra
     -Wpedantic
     -Werror
+     $<$<CONFIG:Release>:-march=native>
+     $<$<CONFIG:Release>:-ffast-math>
 )
+
+set_property(TARGET fluid_simulation PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)

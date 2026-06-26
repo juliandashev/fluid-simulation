@@ -175,7 +175,9 @@ glm::vec2 Simulation::interaction_force(const Particle& particle, glm::vec2 inpu
     glm::vec2 offset = input_position - particle.position;
     float_t dst_sq = glm::dot(offset, offset);
 
-    if (dst_sq < radius * radius) {
+    const float_t r_sq = radius * radius;
+
+    if (dst_sq < r_sq) {
         float_t dst = std::sqrt(dst_sq);
         glm::vec2 dir = dst <= 1e-6f ? glm::vec2(0.0f) : offset / dst;
         float_t falloff = 1.0f - dst / radius;  // 1 at center; 0 at edge

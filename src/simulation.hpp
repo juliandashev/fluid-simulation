@@ -61,7 +61,6 @@ private:
     float_t density_to_pressure(const float_t density);
     float_t calculate_shared_pressure(const float_t density_a, const float_t density_b);
 
-
     SpacialGrid grid_;
     glm::vec2 interaction_point_{0.0f};
     float_t interaction_strength_ = 0.0f;
