@@ -18,10 +18,6 @@ public:
     Renderer(const Renderer&) = delete;
     Renderer& operator=(const Renderer&) = delete;
 
-    // Fullscreen background coloured by the density field. Draw this FIRST
-    // each frame (it clears the screen); particles/lines paint on top.
-    void draw_density_field(const std::vector<Particle>& particles);
-
     void render(const std::vector<Particle>& particles);
 
     // Draws a flat list of vertices as GL_LINES (each pair is one segment).
@@ -38,10 +34,6 @@ private:
     GLuint line_vao_ = 0;
     GLuint line_vbo_ = 0;
     Shader line_shader_;
-
-    GLuint quad_vao_ = 0;
-    GLuint quad_vbo_ = 0;
-    Shader density_shader_;
 
     std::vector<glm::vec2> positions_;  // reused staging buffer, avoids per-frame allocation
     std::vector<float> speeds_;         // per-particle speed, uploaded alongside positions

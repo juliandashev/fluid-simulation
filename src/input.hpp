@@ -6,15 +6,17 @@
 class Input {
 public:
     explicit Input(GLFWwindow* w) : window_(w) {}
-    bool space_pressed() { return edge(GLFW_KEY_SPACE, prev_space_); }
-    bool left_pressed() { return edge(GLFW_KEY_LEFT, prev_left_); }
-    bool right_pressed() { return edge(GLFW_KEY_RIGHT, prev_right_); }
-    bool left_mouse_held() {
+    bool is_space_key_pressed() { return edge(GLFW_KEY_SPACE, prev_space_); }
+    bool is_left_arrow_key_pressed() { return edge(GLFW_KEY_LEFT, prev_left_); }
+    bool is_right_arrow_key_pressed() { return edge(GLFW_KEY_RIGHT, prev_right_); }
+    bool is_R_key_pressed() { return edge(GLFW_KEY_R, prev_r_); }
+    bool is_left_mouse_button_down() {
         return glfwGetMouseButton(window_, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
     }
-    bool right_mouse_held() {
+    bool is_right_mouse_button_down() {
         return glfwGetMouseButton(window_, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
     }
+
     glm::vec2 cursor_pixels() {
         double x, y;
         glfwGetCursorPos(window_, &x, &y);
@@ -31,5 +33,8 @@ private:
     }
 
     GLFWwindow* window_;
-    int prev_space_ = GLFW_RELEASE, prev_left_ = GLFW_RELEASE, prev_right_ = GLFW_RELEASE;
+    int32_t prev_space_ = GLFW_RELEASE;
+    int32_t prev_left_ = GLFW_RELEASE;
+    int32_t prev_right_ = GLFW_RELEASE;
+    int32_t prev_r_ = GLFW_RELEASE;
 };

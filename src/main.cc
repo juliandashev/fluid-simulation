@@ -6,6 +6,7 @@
 #include "renderer.hpp"
 #include "simulation.hpp"
 #include "input.hpp"
+#include "history.hpp"
 
 #include <glm/geometric.hpp>
 
@@ -13,7 +14,6 @@
 #include <vector>
 #include <iostream>
 #include <random>
-#include <deque>
 
 // convert pixels (top-left, y-down) to world uints
 // inverting the vertex shader's transform
@@ -66,25 +66,14 @@ int main() {
         Simulation sim(particles);
         bool testing = false;
 
-        if (testing) {
-            std::random_device rd;
-            uint32_t seed = rd();
-
-            std::cout << "Seed: " << seed << "\n";
-
-            // Spawn particles and sparse them randomly
-            sim.create_particles(seed);
-        } else {
-            // Spawn particles and spawn them in a square shape
-            sim.create_particles();
-        }
+        sim.spawn_particles(testing);
 
         Renderer renderer(particles.size());
 
         // Controlling space
         Input input(window);
+        History history(MAX_HISTORY, particles.size());
         bool paused = false;
-        std::deque<std::vector<Particle>> history;
 
         // Frame calculation variables
         double_t now = 0.0;
@@ -102,9 +91,10 @@ int main() {
                 glfwSetWindowShouldClose(window, GLFW_TRUE);
             }
 
-            bool toggle = input.space_pressed();
-            bool step_fwd = input.right_pressed();
-            bool step_back = input.left_pressed();
+            bool toggle = input.is_space_key_pressed();
+            bool step_fwd = input.is_right_arrow_key_pressed();
+            bool step_back = input.is_left_arrow_key_pressed();
+            bool reset = input.is_R_key_pressed();
 
             now = glfwGetTime();
             frame_time = now - previous;
@@ -120,7 +110,14 @@ int main() {
                 paused = !paused;
             }
 
-            bool interacting = input.left_mouse_held() || input.right_mouse_held();
+            if (reset) {
+                sim.spawn_particles(testing);
+                history.clear();
+                accumulator = 0.0;
+            }
+
+            bool interacting =
+                input.is_left_mouse_button_down() || input.is_right_mouse_button_down();
             glm::vec2 world(0.0f);
 
             if (interacting) {
@@ -129,8 +126,8 @@ int main() {
 
                 world = screen_to_world(input.cursor_pixels(), w, h);
 
-                float_t strength =
-                    input.left_mouse_held() ? INTERACTION_STRENGTH : -INTERACTION_STRENGTH;
+                float_t strength = input.is_left_mouse_button_down() ? INTERACTION_STRENGTH
+                                                                     : -INTERACTION_STRENGTH;
 
                 sim.set_interaction(world, strength);
             } else {
@@ -141,24 +138,18 @@ int main() {
                 accumulator += frame_time * 10.0;
 
                 while (accumulator >= STEP) {
-                    history.push_back(particles);
-
-                    if (history.size() > MAX_HISTORY) {
-                        history.pop_front();
-                    }
-
+                    history.save(particles);
                     sim.simulation_step(STEP);
                     accumulator -= STEP;
                 }
             } else {
                 if (step_fwd) {
-                    history.push_back(particles);
+                    history.save(particles);
                     sim.simulation_step(STEP);
                 }
 
-                if (step_back && !history.empty()) {
-                    particles = history.back();
-                    history.pop_back();
+                if (step_back) {
+                    history.restore(particles);
                 }
             }
 

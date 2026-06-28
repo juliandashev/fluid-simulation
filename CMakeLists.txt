@@ -30,6 +30,10 @@ FetchContent_Declare(
     GIT_TAG        1.0.1
     GIT_SHALLOW    TRUE
 )
+
+set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
+FetchContent_MakeAvailable(glm)
+
 FetchContent_MakeAvailable(glm)
 
 # GLAD — pre-generated for OpenGL 4.3 core, bundled in external/glad/

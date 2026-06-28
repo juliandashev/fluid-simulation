@@ -46,12 +46,13 @@ public:
         interaction_point_ = point;
         interaction_strength_ = strength;
     }
-
-    void create_particles();
-    void create_particles(uint32_t seed);
     void simulation_step(float_t delta_time);
+    void spawn_particles(bool is_random);
 
 private:
+    void create_particles();
+    void create_particles(uint32_t seed);
+
     glm::vec2 calculate_pressure_force(const Particle& particle);
     glm::vec2 get_random_dir();
     glm::vec2 interaction_force(const Particle& particle, glm::vec2 input_position, float_t radius,
@@ -68,4 +69,6 @@ private:
     // Reference to the particle vector
     std::vector<Particle>& particles_;
     std::vector<glm::vec2> predicted_positions_;
+    std::vector<float_t> densities_;
+    std::vector<float_t> pressures_;
 };

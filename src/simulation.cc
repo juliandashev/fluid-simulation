@@ -22,8 +22,8 @@ void Simulation::simulation_step(float_t delta_time) {
     // Calculate densities and pressures
     std::for_each(std::execution::par, particles_.begin(), particles_.end(), [this](Particle& p) {
         size_t i = &p - particles_.data();
-        p.density = calculate_density_at(predicted_positions_[i]);
-        p.pressure = density_to_pressure(p.density);
+        densities_[i] = calculate_density_at(predicted_positions_[i]);
+        pressures_[i] = density_to_pressure(densities_[i]);
     });
 
     // Apply densities and pressure forces
@@ -38,9 +38,10 @@ void Simulation::simulation_step(float_t delta_time) {
 
     // Update positions and resolve collisions
     std::for_each(std::execution::par, particles_.begin(), particles_.end(),
-                  [delta_time](Particle& p) {
+                  [this, delta_time](Particle& p) {
+                      size_t i = &p - particles_.data();
                       // Forward Euler integration
-                      p.velocity += delta_time * p.force / p.density;
+                      p.velocity += delta_time * p.force / densities_[i];
                       p.position += delta_time * p.velocity;
 
                       // Enforce boundary conditions
@@ -60,6 +61,17 @@ void Simulation::simulation_step(float_t delta_time) {
                           p.velocity.y *= BOUNCE_DAMPING;
                       }
                   });
+}
+
+void Simulation::spawn_particles(bool random) {
+    if (random) {
+        std::random_device rd;
+        uint32_t seed = rd();
+        std::cout << "Seed: " << seed << "\n";
+        create_particles(seed);
+    } else {
+        create_particles();
+    }
 }
 
 glm::vec2 Simulation::get_random_dir() {
@@ -98,8 +110,6 @@ glm::vec2 Simulation::calculate_pressure_force(const Particle& particle) {
             return;
         }
 
-        const Particle& pi = particles_[j];
-
         // predicted geometry
         glm::vec2 offset = predicted_positions_[j] - predicted_positions_[i];
         float_t distance = std::sqrt(glm::dot(offset, offset));
@@ -108,8 +118,8 @@ glm::vec2 Simulation::calculate_pressure_force(const Particle& particle) {
         float_t slope = spiky_kernel_derivative(KERNEL_RADIUS, distance);
 
         // scalars stay real
-        float_t shared_pressure = calculate_shared_pressure(pi.pressure, particle.pressure);
-        pressure_force += norm_dir * shared_pressure * slope * MASS / pi.density;
+        float_t shared_pressure = calculate_shared_pressure(pressures_[j], pressures_[i]);
+        pressure_force += norm_dir * shared_pressure * slope * MASS / densities_[j];
     });
 
     return pressure_force;
@@ -144,6 +154,8 @@ void Simulation::create_particles() {
     }
 
     predicted_positions_.resize(particles_.size());
+    densities_.resize(particles_.size());
+    pressures_.resize(particles_.size());
 }
 
 void Simulation::create_particles(uint32_t seed) {
@@ -159,14 +171,12 @@ void Simulation::create_particles(uint32_t seed) {
         Particle p{};
 
         p.position = glm::vec2(dist(rng) * bound_size, dist(rng) * bound_size);
-
-        // Particle property corresponds to a value of this example function
-        // Done for debugging purposes
-        // p.property = std::cos(0.1f * p.position.y - 3.0f + std::sin(0.1f * p.position.x));
         particles_.push_back(p);
     }
 
     predicted_positions_.resize(particles_.size());
+    densities_.resize(particles_.size());
+    pressures_.resize(particles_.size());
 }
 
 glm::vec2 Simulation::interaction_force(const Particle& particle, glm::vec2 input_position,
