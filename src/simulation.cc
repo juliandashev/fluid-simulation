@@ -12,7 +12,7 @@ void Simulation::simulation_step(float_t delta_time) {
     std::for_each(std::execution::par, particles_.begin(), particles_.end(),
                   [this, delta_time](Particle& p) {
                       size_t i = &p - particles_.data();
-                      p.velocity += glm::vec2(0.0f, -1.0f) * GRAVITY * delta_time;
+                      p.velocity += glm::vec2(0.0f, GRAVITY) * delta_time;
                       predicted_positions_[i] = p.position + p.velocity * delta_time;
                   });
 
@@ -87,7 +87,7 @@ glm::vec2 Simulation::get_random_dir() {
 float_t Simulation::density_to_pressure(const float_t density) {
     // how far off target (signed)
     float_t density_error = density - TARGET_DENSITY;
-    return std::max(0.0f, density_error * PRESSURE_MULTIPLIER);
+    return density_error * PRESSURE_MULTIPLIER;
 }
 
 float_t Simulation::calculate_density_at(const glm::vec2& location) {

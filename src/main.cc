@@ -42,7 +42,9 @@ int main() {
     }
 
     glfwMakeContextCurrent(window);
-    glfwSwapInterval(0);
+
+    // vsync, locks to monitor refresh rate, no tearing
+    glfwSwapInterval(1);
 
     if (!gladLoadGL(glfwGetProcAddress)) {
         std::cerr << "Failed to load OpenGL via GLAD\n";
@@ -104,8 +106,6 @@ int main() {
                 frame_time = 0.25;
             }
 
-            const double_t STEP = DT * 10.0;
-
             if (toggle) {
                 paused = !paused;
             }
@@ -135,17 +135,17 @@ int main() {
             }
 
             if (!paused) {
-                accumulator += frame_time * 10.0;
+                accumulator += frame_time * TIME_SCALE;
 
-                while (accumulator >= STEP) {
+                while (accumulator >= DT) {
                     history.save(particles);
-                    sim.simulation_step(STEP);
-                    accumulator -= STEP;
+                    sim.simulation_step(DT);
+                    accumulator -= DT;
                 }
             } else {
                 if (step_fwd) {
                     history.save(particles);
-                    sim.simulation_step(STEP);
+                    sim.simulation_step(DT);
                 }
 
                 if (step_back) {
