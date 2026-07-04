@@ -1,10 +1,10 @@
 #include "spacial_grid.hpp"
 
-#include <glm/geometric.hpp>
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <execution>
+#include <glm/geometric.hpp>
 
 void SpacialGrid::update_spacial_lookup(const std::vector<glm::vec2>& points, float_t radius) {
     points_ = points;
@@ -44,7 +44,7 @@ void SpacialGrid::update_spacial_lookup(const std::vector<glm::vec2>& points, fl
                   });
 }
 
-glm::ivec2 SpacialGrid::position_to_cell_coord(glm::vec2 point, float_t radius) {
+glm::ivec2 SpacialGrid::position_to_cell_coord(glm::vec2 point, float_t radius) const {
     // floor (not truncation) so negative coordinates bin correctly:
     // (int)(-0.1) == 0 would merge the -1 and 0 cells; floor keeps them apart.
     int32_t cell_x = static_cast<int32_t>(std::floor(point.x / radius));
@@ -52,14 +52,14 @@ glm::ivec2 SpacialGrid::position_to_cell_coord(glm::vec2 point, float_t radius) 
     return glm::ivec2(cell_x, cell_y);
 }
 
-uint32_t SpacialGrid::hash_cell(int32_t cell_x, int32_t cell_y) {
+uint32_t SpacialGrid::hash_cell(int32_t cell_x, int32_t cell_y) const {
     // Two large primes scatter neighboring cells far apart in hash space.
     uint32_t a = static_cast<uint32_t>(cell_x) * 15823u;
     uint32_t b = static_cast<uint32_t>(cell_y) * 9737333u;
     return a + b;
 }
 
-uint32_t SpacialGrid::get_key_from_hash(uint32_t hash) {
+uint32_t SpacialGrid::get_key_from_hash(uint32_t hash) const {
     // Fold the unbounded hash into a table slot. Collisions are possible here;
     // the dst_sq <= r_sq test in the query is what filters them out.
     return hash % static_cast<uint32_t>(spacial_lookup_.size());

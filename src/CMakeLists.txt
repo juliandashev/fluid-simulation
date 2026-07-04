@@ -1,4 +1,4 @@
-add_executable(fluid_simulation main.cc simulation.cc renderer.cc shader.cc spacial_grid.cc)
+add_executable(fluid_simulation main.cc simulation.cc renderer.cc shader.cc spacial_grid.cc debug_gui.cc)
 
 find_package(TBB REQUIRED)
 
@@ -8,6 +8,7 @@ target_link_libraries(fluid_simulation PRIVATE
     glm::glm
     OpenGL::GL
     TBB::tbb
+    imgui
 )
 
 target_compile_definitions(fluid_simulation PRIVATE

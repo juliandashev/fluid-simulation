@@ -36,6 +36,25 @@ FetchContent_MakeAvailable(glm)
 
 FetchContent_MakeAvailable(glm)
 
+# For rendering a sliders for live tuning
+FetchContent_Declare(imgui
+    GIT_REPOSITORY https://github.com/ocornut/imgui.git
+    GIT_TAG        v1.91.5
+    GIT_SHALLOW    TRUE)
+FetchContent_MakeAvailable(imgui)      # imgui has no CMakeLists — this just fetches it
+
+add_library(imgui STATIC
+    ${imgui_SOURCE_DIR}/imgui.cpp
+    ${imgui_SOURCE_DIR}/imgui_draw.cpp
+    ${imgui_SOURCE_DIR}/imgui_tables.cpp
+    ${imgui_SOURCE_DIR}/imgui_widgets.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp)
+target_include_directories(imgui SYSTEM PUBLIC
+    ${imgui_SOURCE_DIR} ${imgui_SOURCE_DIR}/backends)
+target_link_libraries(imgui PUBLIC glfw OpenGL::GL)
+
+
 # GLAD — pre-generated for OpenGL 4.3 core, bundled in external/glad/
 add_library(glad STATIC external/glad/src/gl.c)
 target_include_directories(glad PUBLIC external/glad/include)
@@ -43,3 +62,7 @@ target_include_directories(glad PUBLIC external/glad/include)
 find_package(OpenGL REQUIRED)
 
 add_subdirectory(src)
+
+# GLFW includes a system GL header by default; suppress it so glad is the sole
+# GL loader and include order stops mattering. Must come after the target exists.
+target_compile_definitions(fluid_simulation PRIVATE GLFW_INCLUDE_NONE)

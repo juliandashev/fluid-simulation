@@ -1,19 +1,19 @@
-#include <glad/gl.h>
 #include <GLFW/glfw3.h>
+#include <glad/gl.h>
 
+#include <cstdlib>
+#include <glm/geometric.hpp>
+#include <iostream>
+#include <random>
+#include <vector>
+
+#include "debug_gui.hpp"
 #include "defs.hpp"
+#include "history.hpp"
+#include "input.hpp"
 #include "particle.hpp"
 #include "renderer.hpp"
 #include "simulation.hpp"
-#include "input.hpp"
-#include "history.hpp"
-
-#include <glm/geometric.hpp>
-
-#include <cstdlib>
-#include <vector>
-#include <iostream>
-#include <random>
 
 // convert pixels (top-left, y-down) to world uints
 // inverting the vertex shader's transform
@@ -72,6 +72,10 @@ int main() {
 
         Renderer renderer(particles.size());
 
+        // Live parameter panel. RAII: owns the ImGui context for this scope, so
+        // it tears down while the GL context is still current (like Renderer).
+        DebugGui gui(window);
+
         // Controlling space
         Input input(window);
         History history(MAX_HISTORY, particles.size());
@@ -89,9 +93,14 @@ int main() {
         int32_t frame_count = 0;
 
         while (!glfwWindowShouldClose(window)) {
+            glfwPollEvents();
+
             if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
                 glfwSetWindowShouldClose(window, GLFW_TRUE);
             }
+
+            gui.begin_frame();
+            gui.draw_params(sim.params());
 
             bool toggle = input.is_space_key_pressed();
             bool step_fwd = input.is_right_arrow_key_pressed();
@@ -116,8 +125,8 @@ int main() {
                 accumulator = 0.0;
             }
 
-            bool interacting =
-                input.is_left_mouse_button_down() || input.is_right_mouse_button_down();
+            bool interacting = !gui.wants_mouse() && (input.is_left_mouse_button_down() ||
+                                                      input.is_right_mouse_button_down());
             glm::vec2 world(0.0f);
 
             if (interacting) {
@@ -134,18 +143,32 @@ int main() {
                 sim.set_interaction(glm::vec2(0.0f), 0.0f);
             }
 
-            if (!paused) {
-                accumulator += frame_time * TIME_SCALE;
+            float_t dt = sim.params().dt;
+            float_t time_scale = sim.params().time_scale;
 
-                while (accumulator >= DT) {
+            if (dt < 1e-4f) {
+                dt = 1e-4f;  // a typo'd 0 would stall the loop
+            }
+
+            if (!paused) {
+                accumulator += frame_time * time_scale;
+
+                int32_t steps = 0;
+                while (accumulator >= dt && steps < MAX_SUBSTEPS) {
                     history.save(particles);
-                    sim.simulation_step(DT);
-                    accumulator -= DT;
+                    sim.simulation_step(dt);
+                    accumulator -= dt;
+                    ++steps;
                 }
+
+                if (accumulator >= dt) {
+                    accumulator = 0.0f;
+                }
+
             } else {
                 if (step_fwd) {
                     history.save(particles);
-                    sim.simulation_step(DT);
+                    sim.simulation_step(dt);
                 }
 
                 if (step_back) {
@@ -162,8 +185,9 @@ int main() {
                 renderer.draw_circle(world, INTERACTION_RADIUS, glm::vec3(1.0f, 0.2f, 0.2f));
             }
 
+            gui.end_frame();
+
             glfwSwapBuffers(window);
-            glfwPollEvents();
 
             frame_count++;
             elapsed = glfwGetTime() - fps_timer;

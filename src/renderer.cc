@@ -1,6 +1,7 @@
+#include "renderer.hpp"
+
 #include <glm/geometric.hpp>
 
-#include "renderer.hpp"
 #include "defs.hpp"
 
 Renderer::Renderer(size_t max_particles)

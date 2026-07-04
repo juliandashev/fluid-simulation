@@ -74,5 +74,8 @@ bin/
 # local editor / tooling
 .claude/
 
+# Dear ImGui window-layout state (per-user, regenerated at runtime)
+imgui.ini
+
 # local gnuplot visualization scripts
 *.plt

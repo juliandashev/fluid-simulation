@@ -1,7 +1,8 @@
 #pragma once
 
-#include <glm/vec2.hpp>
 #include <GLFW/glfw3.h>
+
+#include <glm/vec2.hpp>
 
 class Input {
 public:
