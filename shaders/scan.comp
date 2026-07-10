@@ -1,0 +1,30 @@
+// Building start indices for each cell in the grid: an exclusive prefix sum
+// over cell_counts. Runs as a single invocation - ~950 cells is too small
+// to be worth a parallel scan.
+#version 430
+
+layout(local_size_x = 1) in;
+
+layout(std430, binding = 4) buffer CellCounts {
+    uint cell_counts[];
+};
+
+layout(std430, binding = 5) buffer CellStarts {
+    uint cell_starts[];
+};
+
+layout(std430, binding = 6) buffer CellCursors {
+    uint cell_cursors[];
+};
+
+uniform int u_num_cells;
+
+void main() {
+    uint sum = 0u;
+
+    for (int c = 0; c < u_num_cells; ++c) {
+        cell_starts[c] = sum;
+        cell_cursors[c] = sum;
+        sum += cell_counts[c];
+    }
+}

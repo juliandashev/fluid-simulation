@@ -1,0 +1,94 @@
+#version 430
+
+layout(local_size_x = 256) in;
+
+layout(std430, binding = 0) buffer Positions {
+    vec2 positions[];
+};
+
+layout(std430, binding = 2) buffer Densities {
+    vec2 densities[];   // x = density, y = near_density
+};
+
+layout(std430, binding = 4) buffer CellCounts { uint cell_counts[]; };
+layout(std430, binding = 5) buffer CellStarts { uint cell_starts[]; };
+layout(std430, binding = 7) buffer SortedIndices { uint sorted_indices[]; };
+
+uniform uint u_num_particles;
+uniform float u_kernel_radius;     // h
+uniform float u_kernel_radius_sq;  // h^2
+uniform float u_mass;
+uniform vec2 u_grid_origin;
+uniform float u_cell_size;
+uniform int u_grid_w;
+uniform int u_grid_h;
+
+const float PI = 3.14159265358979;
+
+float smoothing_kernel(float radius_sq, float distance_sq) {
+    if (distance_sq >= radius_sq) {
+        return 0.0;
+    }
+    float volume = PI * (radius_sq * radius_sq * radius_sq * radius_sq) / 4.0;
+    float diff = radius_sq - distance_sq;
+    return (diff * diff * diff) / volume;
+}
+
+float near_smoothing_kernel(float radius, float distance) {
+    if (distance >= radius) {
+        return 0.0;
+    }
+
+    float h_sq = radius * radius;
+    float scale = PI * (h_sq * h_sq * h_sq);
+    float diff = radius - distance;
+
+    return 15.0f * (diff * diff) * (diff * diff) / scale;
+}
+
+// One 3x3 cell walk, both density sums in a single pass. No self-exclusion:
+// a particle contributes to its own density (kernel peaks at distance 0).
+vec2 gather_density(vec2 position_i) {
+    float density = 0.0;
+    float near_density = 0.0;
+
+    ivec2 my_cell = ivec2(floor((position_i - u_grid_origin) / u_cell_size));
+
+    for (int dy = -1; dy <= 1; ++dy) {
+        for (int dx = -1; dx <= 1; ++dx) {
+            ivec2 cell = my_cell + ivec2(dx, dy);
+
+            if (cell.x < 0 || cell.x >= u_grid_w || cell.y < 0 || cell.y >= u_grid_h) {
+                continue;
+            }
+
+            uint ci = uint(cell.y * u_grid_w + cell.x);
+
+            uint start = cell_starts[ci];
+            uint end = start + cell_counts[ci];
+
+            for (uint k = start; k < end; ++k) {
+                uint j = sorted_indices[k];
+
+                vec2 offset = positions[j] - position_i;
+                float distance_sq = dot(offset, offset);
+
+                if (distance_sq >= u_kernel_radius_sq) {
+                    continue;
+                }
+
+                density += u_mass * smoothing_kernel(u_kernel_radius_sq, distance_sq);
+                near_density += u_mass * near_smoothing_kernel(u_kernel_radius, sqrt(distance_sq));
+            }
+        }
+    }
+
+    return vec2(density, near_density);
+}
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= u_num_particles) return;
+
+    densities[i] = gather_density(positions[i]);
+}

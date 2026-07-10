@@ -1,0 +1,263 @@
+#version 430
+
+layout(local_size_x = 256) in;
+
+layout(std430, binding = 0) buffer Positions  { vec2 positions[]; };
+layout(std430, binding = 1) buffer Velocities { vec2 velocities[]; };
+layout(std430, binding = 2) buffer Densities  { vec2 densities[]; };
+layout(std430, binding = 3) buffer Accelerations { vec2 accelerations[]; };
+layout(std430, binding = 4) buffer CellCounts { uint cell_counts[]; };
+layout(std430, binding = 5) buffer CellStarts { uint cell_starts[]; };
+layout(std430, binding = 7) buffer SortedIndices { uint sorted_indices[]; };
+
+uniform uint u_num_particles;
+uniform vec2 u_grid_origin;
+uniform float u_cell_size;
+uniform int u_grid_w;
+uniform int u_grid_h;
+uniform float u_kernel_radius;
+uniform float u_kernel_radius_sq;
+uniform float u_mass;
+uniform float u_target_density;
+uniform float u_pressure_multiplier;
+uniform float u_near_pressure_multiplier;
+uniform float u_viscosity;
+uniform float u_tension_threshold;
+uniform float u_tension_strength;
+uniform float u_cohesion_strength;
+uniform float u_interaction_strength;
+uniform vec2 u_interaction_point;
+uniform float u_interaction_radius;
+
+const float PI = 3.14159265358979;
+
+float spiky_kernel_derivative(float radius, float distance) {
+    if (distance >= radius) {
+        return 0.0f;
+    }
+
+    float h_sq = radius * radius;
+    float scale = PI * (h_sq * h_sq * radius);
+    float diff = radius - distance;
+
+    return -30.0f * diff * diff / scale;
+}
+
+float viscosity_kernel_laplacian(float radius, float distance) {
+    if (distance >= radius) {
+        return 0.0f;
+    }
+
+    float h_sq = radius * radius;
+    float scale = PI * (h_sq * h_sq * radius);
+
+    // Divergence of the gradient
+    return 40.0f * (radius - distance) / scale;
+}
+
+float near_spiky_kernel_derivative(float radius, float distance) {
+    if (distance >= radius) {
+        return 0.0f;
+    }
+
+    float h_sq = radius * radius;
+    float scale = PI * (h_sq * h_sq * h_sq);
+    float diff = radius - distance;
+
+    return -60.0f * diff * diff * diff / scale;
+}
+
+float pressure_from_density(float density) {
+    float ratio = density / u_target_density;
+    return max(0.0, u_pressure_multiplier * (pow(ratio, 4.0) - 1.0));
+}
+
+float near_pressure_from_density(float near_density) {
+    return near_density * u_near_pressure_multiplier;
+}
+
+float poly6_gradient_coeff(float radius_sq, float distance_sq) {
+    if (distance_sq >= radius_sq) {
+        return 0.0;
+    }
+
+    float h8 = radius_sq * radius_sq * radius_sq * radius_sq;  // h^8
+    float scale = PI * h8;
+    float diff = radius_sq - distance_sq;
+
+    return -24.0 * diff * diff / scale;
+}
+
+float poly6_laplacian(float radius_sq, float distance_sq) {
+    if (distance_sq >= radius_sq) {
+        return 0.0;
+    }
+
+    float h8 = radius_sq * radius_sq * radius_sq * radius_sq;  // h^8
+    float scale = PI * h8;
+    float diff = radius_sq - distance_sq;
+
+    return -48.0 * diff * (radius_sq - 3.0 * distance_sq) / scale;
+}
+
+// Akinci-style pairwise cohesion weight: ~zero up close (near-pressure owns
+// that range), peaks at half the kernel radius, fades to zero at the edge.
+// Unlike the color-field tension, this attraction persists while separating
+// clumps still overlap kernels - that is what pinches necks into droplets.
+float cohesion_kernel(float radius, float distance) {
+    float q = distance / radius;  // 0..1 inside the kernel
+    return q < 1.0 ? q * q * (1.0 - q) * (1.0 - q) : 0.0;
+}
+
+vec2 interaction_force(vec2 position,
+        vec2 velocity,
+        vec2 input_position,
+        float radius,
+        float strength) {
+    vec2 force = vec2(0.0, 0.0);
+    vec2 offset = input_position - position;
+    float distance_sq = dot(offset, offset);
+
+    const float r_sq = radius * radius;
+
+    if (distance_sq < r_sq) {
+        float dst = sqrt(distance_sq);
+        vec2 dir = dst <= 1e-6f ? vec2(0.0) : offset / dst;
+        float falloff = 1.0 - (dst / radius);  // 1 at center; 0 at edge
+
+        force = (dir * strength - velocity) * falloff;
+    }
+
+    return (strength == 0.0) ? vec2(0.0) : force;
+}
+
+// Everything main() combines into accelerations[i], gathered in one neighbor walk.
+struct Forces {
+    vec2 pressure;
+    vec2 viscosity;
+    vec2 tension;
+    vec2 cohesion;
+};
+
+// Running sums over neighbors; tension needs the color field finished
+// before it can be evaluated, so the raw gradient/laplacian ride along.
+struct Accumulator {
+    vec2 pressure_force;
+    vec2 viscosity_force;
+    vec2 cohesion_force;
+    vec2 color_gradient;   // surface normal, points outward
+    float color_laplacian; // curvature measure
+};
+
+void accumulate_neighbor(uint i, uint j, vec2 position_i, vec2 velocity_i,
+                         float pressure_i, float near_pressure_i,
+                         inout Accumulator accumulator) {
+    vec2 offset = positions[j] - position_i;
+    float distance_sq = dot(offset, offset);
+
+    if (distance_sq >= u_kernel_radius_sq) {
+        return;
+    }
+
+    float mj_over_rho_j = u_mass / densities[j].x;
+
+    float distance = sqrt(distance_sq);
+    vec2 norm_dir = distance < 1e-6
+        ? normalize(vec2(sin(float(i) * 12.9898), cos(float(i) * 78.233)))
+        : offset / distance;
+
+    float slope = spiky_kernel_derivative(u_kernel_radius, distance);
+    float near_slope = near_spiky_kernel_derivative(u_kernel_radius, distance);
+
+    // shared pressure = average of mine and neighbor's, same as the CPU helper
+    float pressure_j = pressure_from_density(densities[j].x);
+    float near_pressure_j = near_pressure_from_density(densities[j].y);
+    float shared_pressure = 0.5 * (pressure_i + pressure_j);
+    float near_shared_pressure = 0.5 * (near_pressure_i + near_pressure_j);
+
+    accumulator.pressure_force +=
+        norm_dir * u_mass * (shared_pressure * slope + near_shared_pressure * near_slope);
+
+    float influence = viscosity_kernel_laplacian(u_kernel_radius, distance);
+    accumulator.viscosity_force += (velocities[j] - velocity_i) * influence * mj_over_rho_j;
+
+    // attraction toward the neighbor; strength is applied once in gather_forces
+    accumulator.cohesion_force +=
+        norm_dir * u_mass * cohesion_kernel(u_kernel_radius, distance);
+
+    accumulator.color_gradient +=
+        poly6_gradient_coeff(u_kernel_radius_sq, distance_sq) * offset * mj_over_rho_j;
+
+    accumulator.color_laplacian += mj_over_rho_j * poly6_laplacian(u_kernel_radius_sq, distance_sq);
+}
+
+// One 3x3 cell walk feeds all force accumulators: each neighbor's data is
+// fetched exactly once, which is what keeps this (the hot loop) affordable.
+Forces gather_forces(uint i, vec2 position_i, vec2 velocity_i) {
+    float pressure_i = pressure_from_density(densities[i].x);
+    float near_pressure_i = near_pressure_from_density(densities[i].y);
+
+    Accumulator accumulator = Accumulator(vec2(0.0), vec2(0.0), vec2(0.0), vec2(0.0), 0.0);
+
+    ivec2 my_cell = ivec2(floor((position_i - u_grid_origin) / u_cell_size));
+
+    for (int dy = -1; dy <= 1; ++dy) {
+        for (int dx = -1; dx <= 1; ++dx) {
+            ivec2 cell = my_cell + ivec2(dx, dy);
+
+            if (cell.x < 0 || cell.x >= u_grid_w || cell.y < 0 || cell.y >= u_grid_h) {
+                continue;
+            }
+
+            uint ci = uint(cell.y * u_grid_w + cell.x);
+
+            uint start = cell_starts[ci];
+            uint end = start + cell_counts[ci];
+
+            for (uint k = start; k < end; ++k) {
+                uint j = sorted_indices[k];
+                if (j == i) {
+                    continue;
+                }
+
+                accumulate_neighbor(i, j, position_i, velocity_i, pressure_i, near_pressure_i, accumulator);
+            }
+        }
+    }
+
+    Forces f;
+    f.pressure = accumulator.pressure_force;
+    f.viscosity = accumulator.viscosity_force;
+    f.cohesion = accumulator.cohesion_force * u_cohesion_strength;
+
+    // Mueller color-field tension: only where the surface normal is strong
+    // enough to mark a boundary, pull along it proportional to curvature.
+    f.tension = vec2(0.0);
+    float n_len = length(accumulator.color_gradient);
+
+    if (n_len > u_tension_threshold) {
+        f.tension = -u_tension_strength * accumulator.color_laplacian *
+            (accumulator.color_gradient / n_len);
+    }
+
+    return f;
+}
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= u_num_particles) return;
+
+    vec2 position_i = positions[i];
+    vec2 velocity_i = velocities[i];
+
+    Forces f = gather_forces(i, position_i, velocity_i);
+
+    vec2 interaction = interaction_force(position_i,
+                                         velocity_i,
+                                         u_interaction_point,
+                                         u_interaction_radius,
+                                         u_interaction_strength);
+
+    accelerations[i] =
+        (f.pressure + f.viscosity * u_viscosity + f.tension + f.cohesion + interaction) / densities[i].x;
+}

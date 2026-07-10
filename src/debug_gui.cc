@@ -34,8 +34,11 @@ void DebugGui::draw_params(SimParams& params) {
     ImGui::InputFloat("density", &params.target_density, 0.01f, 0.1f, "%.3f");
     ImGui::InputFloat("k_near", &params.near_pressure_multiplier, 10.0f, 50.0f, "%.1f");
     ImGui::InputFloat("viscosity", &params.viscosity, 0.5f, 2.0f, "%.2f");
-    ImGui::InputFloat("dt", &params.dt, 0.001f, 0.005f, "%.4f");
+    ImGui::InputFloat("dt", &params.dt, 0.001f, 0.0005f, "%.5f");
     ImGui::InputFloat("time scale", &params.time_scale, 0.1f, 0.5f, "%.2f");
+    ImGui::InputFloat("tension threshold", &params.tension_threshold, 0.1f, 0.5f, "%.2f");
+    ImGui::InputFloat("tension strength", &params.tension_strength, 0.1f, 0.5f, "%.2f");
+    ImGui::InputFloat("cohesion", &params.cohesion_strength, 5.0f, 25.0f, "%.1f");
 
     if (ImGui::Button("Reset to defaults")) {
         params = SimParams{};

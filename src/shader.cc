@@ -37,6 +37,28 @@ GLuint Shader::compile(GLenum type, const std::string& src) {
     return shader;
 }
 
+Shader::Shader(const std::string& compute_path) {
+    GLuint comp = compile(GL_COMPUTE_SHADER, read_file(compute_path));
+
+    id_ = glCreateProgram();
+    glAttachShader(id_, comp);
+    glLinkProgram(id_);
+
+    glDeleteShader(comp);
+
+    GLint ok;
+    glGetProgramiv(id_, GL_LINK_STATUS, &ok);
+
+    if (!ok) {
+        char log[LOG_SIZE];
+        glGetProgramInfoLog(id_, sizeof(log), nullptr, log);
+        glDeleteProgram(id_);
+        id_ = 0;
+        std::cerr << "Shader link error:\n" << log << "\n";
+        std::exit(EXIT_FAILURE);
+    }
+}
+
 Shader::Shader(const std::string& vert_path, const std::string& frag_path) {
     GLuint vert = compile(GL_VERTEX_SHADER, read_file(vert_path));
     GLuint frag = compile(GL_FRAGMENT_SHADER, read_file(frag_path));
@@ -71,6 +93,10 @@ void Shader::set_float(const char* name, float value) const {
     glUniform1f(glGetUniformLocation(id_, name), value);
 }
 
+void Shader::set_vec2(const char* name, const glm::vec2& v) const {
+    glUniform2f(glGetUniformLocation(id_, name), v.x, v.y);
+}
+
 void Shader::set_vec3(const char* name, const glm::vec3& v) const {
     glUniform3fv(glGetUniformLocation(id_, name), 1, glm::value_ptr(v));
 }
@@ -93,4 +119,8 @@ void Shader::set_vec2_array(const char* name, const glm::vec2* data, int count) 
 
 void Shader::set_float_array(const char* name, const float* data, int count) const {
     glUniform1fv(glGetUniformLocation(id_, name), count, data);
+}
+
+void Shader::set_uint(const char* name, uint32_t value) const {
+    glUniform1ui(glGetUniformLocation(id_, name), value);
 }

@@ -1,0 +1,33 @@
+#version 430
+
+layout(local_size_x = 256) in;
+
+layout(std430, binding = 3) buffer Accelerations {
+    vec2 accelerations[];
+};
+
+layout(std430, binding = 8) buffer Speeds {
+    float speeds[];
+};
+
+layout(std430, binding = 11) buffer MaxKinematics {
+    uint max_speed_bits;
+    uint max_accel_bits;
+};
+
+uniform uint u_num_particles;
+
+// Non-negative floats keep their ordering when their bit patterns are
+// compared as unsigned ints, so a uint atomicMax over floatBitsToUint
+// yields the exact float maximum. Both inputs are magnitudes, so >= 0.
+//
+// Speed feeds the velocity CFL condition; acceleration feeds the force
+// condition, which reacts a frame earlier - a compression spikes the
+// acceleration before it has had time to become velocity.
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= u_num_particles) return;
+
+    atomicMax(max_speed_bits, floatBitsToUint(speeds[i]));
+    atomicMax(max_accel_bits, floatBitsToUint(length(accelerations[i])));
+}

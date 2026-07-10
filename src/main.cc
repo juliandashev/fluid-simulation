@@ -1,17 +1,15 @@
 #include <GLFW/glfw3.h>
 #include <glad/gl.h>
 
+#include <algorithm>
 #include <cstdlib>
-#include <glm/geometric.hpp>
 #include <iostream>
-#include <random>
 #include <vector>
 
 #include "debug_gui.hpp"
 #include "defs.hpp"
 #include "history.hpp"
 #include "input.hpp"
-#include "particle.hpp"
 #include "renderer.hpp"
 #include "simulation.hpp"
 
@@ -60,17 +58,18 @@ int main() {
     glfwSetFramebufferSizeCallback(
         window, [](GLFWwindow*, int32_t w, int32_t h) { glViewport(0, 0, w, h); });
 
-    std::vector<Particle> particles;
-
     // Scoped so Renderer's destructor runs (and frees its GL objects)
     // while the GL context still exists
     {
-        Simulation sim(particles);
+        SimParams params;
+
+        Simulation sim(NUM_PARTICLES);
+
         bool testing = false;
 
         sim.spawn_particles(testing);
 
-        Renderer renderer(particles.size());
+        Renderer renderer(NUM_PARTICLES);
 
         // Live parameter panel. RAII: owns the ImGui context for this scope, so
         // it tears down while the GL context is still current (like Renderer).
@@ -78,7 +77,7 @@ int main() {
 
         // Controlling space
         Input input(window);
-        History history(MAX_HISTORY, particles.size());
+        History history(MAX_HISTORY, NUM_PARTICLES);
         bool paused = false;
 
         // Frame calculation variables
@@ -100,7 +99,7 @@ int main() {
             }
 
             gui.begin_frame();
-            gui.draw_params(sim.params());
+            gui.draw_params(params);
 
             bool toggle = input.is_space_key_pressed();
             bool step_fwd = input.is_right_arrow_key_pressed();
@@ -143,20 +142,36 @@ int main() {
                 sim.set_interaction(glm::vec2(0.0f), 0.0f);
             }
 
-            float_t dt = sim.params().dt;
-            float_t time_scale = sim.params().time_scale;
+            float_t dt = params.dt;
+            float_t time_scale = params.time_scale;
 
             if (dt < 1e-4f) {
                 dt = 1e-4f;  // a typo'd 0 would stall the loop
             }
+
+            // Adaptive time step, two CFL conditions: velocity (no particle
+            // crosses too much of a kernel radius per step) and acceleration
+            // (catches a force spike the frame it appears, before it becomes
+            // velocity). params.dt is the ceiling: calm fluid runs full speed.
+            glm::vec2 kin = sim.max_kinematics();  // x: max speed, y: max accel
+
+            float_t cfl_dt = dt;
+            if (kin.x > 1e-6f) {  // at rest the divisions blow up
+                cfl_dt = CFL_LAMBDA * KERNEL_RADIUS / kin.x;
+            }
+            if (kin.y > 1e-6f) {
+                cfl_dt = std::min(cfl_dt, CFL_LAMBDA_FORCE * std::sqrt(KERNEL_RADIUS / kin.y));
+            }
+            dt = std::clamp(cfl_dt, DT_MIN, dt);
 
             if (!paused) {
                 accumulator += frame_time * time_scale;
 
                 int32_t steps = 0;
                 while (accumulator >= dt && steps < MAX_SUBSTEPS) {
-                    history.save(particles);
-                    sim.simulation_step(dt);
+                    history.save(sim.position_buffer(), sim.velocity_buffer(),
+                                 sim.speed_buffer());
+                    sim.step(dt, params);
                     accumulator -= dt;
                     ++steps;
                 }
@@ -167,19 +182,22 @@ int main() {
 
             } else {
                 if (step_fwd) {
-                    history.save(particles);
-                    sim.simulation_step(dt);
+                    history.save(sim.position_buffer(), sim.velocity_buffer(),
+                                 sim.speed_buffer());
+                    sim.step(dt, params);
                 }
 
                 if (step_back) {
-                    history.restore(particles);
+                    history.restore(sim.position_buffer(), sim.velocity_buffer(),
+                                    sim.speed_buffer());
                 }
             }
 
             glClearColor(0.02f, 0.04f, 0.10f, 1.0f);
             glClear(GL_COLOR_BUFFER_BIT);
 
-            renderer.render(particles);
+            renderer.render(sim.position_buffer(), sim.speed_buffer(),
+                                   sim.count());
 
             if (interacting) {
                 renderer.draw_circle(world, INTERACTION_RADIUS, glm::vec3(1.0f, 0.2f, 0.2f));

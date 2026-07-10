@@ -73,6 +73,7 @@ bin/
 
 # local editor / tooling
 .claude/
+.vscode/
 
 # Dear ImGui window-layout state (per-user, regenerated at runtime)
 imgui.ini

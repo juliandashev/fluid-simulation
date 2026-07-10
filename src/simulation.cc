@@ -1,96 +1,222 @@
 #include "simulation.hpp"
 
 #include <cmath>
-#include <execution>
-#include <glm/geometric.hpp>
+#include <cstring>
 #include <iostream>
 #include <random>
 
-Simulation::Simulation(std::vector<Particle>& particles) : particles_(particles) {}
+#include "defs.hpp"
 
-void Simulation::simulation_step(float_t delta_time) {
-    // Snapshot the current state into the flat arrays the integrator works on.
-    std::for_each(std::execution::par, particles_.begin(), particles_.end(), [this](Particle& p) {
-        size_t i = &p - particles_.data();
-        cur_pos_[i] = p.position;
-        cur_vel_[i] = p.velocity;
-    });
+Simulation::Simulation(uint32_t count)
+    : step_(SHADER_DIR "/step.comp"),
+      midpoint_(SHADER_DIR "/midpoint.comp"),
+      density_(SHADER_DIR "/density.comp"),
+      force_(SHADER_DIR "/force.comp"),
+      count_shader_(SHADER_DIR "/count.comp"),
+      scan_(SHADER_DIR "/scan.comp"),
+      scatter_(SHADER_DIR "/scatter.comp"),
+      reduce_max_(SHADER_DIR "/reduce_max.comp"),
+      count_(count) {
+    // Allocate only; spawn_particles() fills positions/velocities.
+    glGenBuffers(1, &position_ssbo_);
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, position_ssbo_);
+    glBufferData(GL_SHADER_STORAGE_BUFFER, count_ * sizeof(glm::vec2), nullptr, GL_DYNAMIC_DRAW);
 
-    accelerations(cur_pos_, cur_vel_, accel1_);
+    glGenBuffers(1, &velocity_ssbo_);
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, velocity_ssbo_);
+    glBufferData(GL_SHADER_STORAGE_BUFFER, count_ * sizeof(glm::vec2), nullptr, GL_DYNAMIC_DRAW);
 
-    std::for_each(std::execution::par, particles_.begin(), particles_.end(),
-                  [this, delta_time](Particle& p) {
-                      size_t i = &p - particles_.data();
-                      mid_pos_[i] = cur_pos_[i] + 0.5f * delta_time * cur_vel_[i];
-                      mid_vel_[i] = cur_vel_[i] + 0.5f * delta_time * accel1_[i];
-                  });
+    // RK2 midpoint state, written and read entirely on the GPU.
+    glGenBuffers(1, &mid_position_ssbo_);
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, mid_position_ssbo_);
+    glBufferData(GL_SHADER_STORAGE_BUFFER, count_ * sizeof(glm::vec2), nullptr, GL_DYNAMIC_DRAW);
 
-    accelerations(mid_pos_, mid_vel_, accel2_);
+    glGenBuffers(1, &mid_velocity_ssbo_);
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, mid_velocity_ssbo_);
+    glBufferData(GL_SHADER_STORAGE_BUFFER, count_ * sizeof(glm::vec2), nullptr, GL_DYNAMIC_DRAW);
 
-    std::for_each(std::execution::par, particles_.begin(), particles_.end(),
-                  [this, delta_time](Particle& p) {
-                      size_t i = &p - particles_.data();
-                      cur_pos_[i] = cur_pos_[i] + delta_time * mid_vel_[i];
-                      cur_vel_[i] = cur_vel_[i] + delta_time * accel2_[i];
-                  });
+    glGenBuffers(1, &density_ssbo_);
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, density_ssbo_);
+    glBufferData(GL_SHADER_STORAGE_BUFFER, count_ * sizeof(glm::vec2), nullptr, GL_DYNAMIC_DRAW);
 
-    // Write the integrated state back onto the particles and resolve boundaries.
-    std::for_each(std::execution::par, particles_.begin(), particles_.end(), [this](Particle& p) {
-        size_t i = &p - particles_.data();
-        p.position = cur_pos_[i];
-        p.velocity = cur_vel_[i];
+    glGenBuffers(1, &acceleration_ssbo_);
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, acceleration_ssbo_);
+    glBufferData(GL_SHADER_STORAGE_BUFFER, count_ * sizeof(glm::vec2), nullptr, GL_DYNAMIC_DRAW);
 
-        if (p.position.x < -DOMAIN_HALF_X + EPS) {
-            p.position.x = -DOMAIN_HALF_X + EPS;
-            p.velocity.x *= BOUNCE_DAMPING;
-        } else if (p.position.x > DOMAIN_HALF_X - EPS) {
-            p.position.x = DOMAIN_HALF_X - EPS;
-            p.velocity.x *= BOUNCE_DAMPING;
-        }
+    glGenBuffers(1, &speed_ssbo_);
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, speed_ssbo_);
+    glBufferData(GL_SHADER_STORAGE_BUFFER, count_ * sizeof(float_t), nullptr, GL_DYNAMIC_DRAW);
 
-        if (p.position.y < DOMAIN_MIN) {
-            p.position.y = DOMAIN_MIN;
-            p.velocity.y *= BOUNCE_DAMPING;
-        } else if (p.position.y > DOMAIN_MAX) {
-            p.position.y = DOMAIN_MAX;
-            p.velocity.y *= BOUNCE_DAMPING;
-        }
-    });
+    glGenBuffers(1, &max_kinematics_ssbo_);
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, max_kinematics_ssbo_);
+    glBufferData(GL_SHADER_STORAGE_BUFFER, 2 * sizeof(GLuint), nullptr, GL_DYNAMIC_READ);
+
+    glGenBuffers(1, &cell_counts_);
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, cell_counts_);
+    glBufferData(GL_SHADER_STORAGE_BUFFER, NUM_CELLS * sizeof(GLuint), nullptr, GL_DYNAMIC_DRAW);
+
+    glGenBuffers(1, &cell_starts_);
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, cell_starts_);
+    glBufferData(GL_SHADER_STORAGE_BUFFER, NUM_CELLS * sizeof(GLuint), nullptr, GL_DYNAMIC_DRAW);
+
+    glGenBuffers(1, &cell_cursors_);
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, cell_cursors_);
+    glBufferData(GL_SHADER_STORAGE_BUFFER, NUM_CELLS * sizeof(GLuint), nullptr, GL_DYNAMIC_DRAW);
+
+    glGenBuffers(1, &sorted_indices_);
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, sorted_indices_);
+    glBufferData(GL_SHADER_STORAGE_BUFFER, NUM_PARTICLES * sizeof(GLuint), nullptr,
+                 GL_DYNAMIC_DRAW);
+
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+
+    set_static_uniforms();
 }
 
-// Fills accel_out[i] with the acceleration of particle i evaluated at the given
-// positions/velocities: gravity + (pressure + viscosity + interaction) / density.
-// Rebuilds the neighbor grid and density field on the passed-in state, so it can
-// be evaluated at any RK stage (start, midpoint, ...).
-void Simulation::accelerations(const std::vector<glm::vec2>& pos, const std::vector<glm::vec2>& vel,
-                               std::vector<glm::vec2>& accel_out) {
-    predicted_positions_ = pos;  // grid + density + pressure-force sample these
-    sample_velocities_ = vel;    // the viscosity term samples these
-
-    grid_.update_spacial_lookup(predicted_positions_, KERNEL_RADIUS);
-
-    std::for_each(std::execution::par, particles_.begin(), particles_.end(), [this](Particle& p) {
-        size_t i = &p - particles_.data();
-        auto [density, near_density] = calculate_density_at(predicted_positions_[i]);
-        auto [pressure, near_pressure] = density_to_pressure(density, near_density);
-        fields_[i] = {density, near_density, pressure, near_pressure};
-    });
-
-    std::for_each(std::execution::par, particles_.begin(), particles_.end(),
-                  [this, &accel_out](Particle& p) {
-                      size_t i = &p - particles_.data();
-                      glm::vec2 force = calculate_forces(i);
-                      if (interaction_strength_ != 0.0f) {
-                          force += interaction_force(predicted_positions_[i], sample_velocities_[i],
-                                                     interaction_point_, INTERACTION_RADIUS,
-                                                     interaction_strength_);
-                      }
-                      accel_out[i] = glm::vec2(0.0f, params_.gravity) + force / fields_[i].density;
-                  });
+Simulation::~Simulation() {
+    glDeleteBuffers(1, &position_ssbo_);
+    glDeleteBuffers(1, &velocity_ssbo_);
+    glDeleteBuffers(1, &mid_position_ssbo_);
+    glDeleteBuffers(1, &mid_velocity_ssbo_);
+    glDeleteBuffers(1, &density_ssbo_);
+    glDeleteBuffers(1, &acceleration_ssbo_);
+    glDeleteBuffers(1, &speed_ssbo_);
+    glDeleteBuffers(1, &max_kinematics_ssbo_);
+    glDeleteBuffers(1, &cell_counts_);
+    glDeleteBuffers(1, &cell_starts_);
+    glDeleteBuffers(1, &cell_cursors_);
+    glDeleteBuffers(1, &sorted_indices_);
 }
 
-void Simulation::spawn_particles(bool random) {
-    if (random) {
+void Simulation::step(float_t delta_time, const SimParams& params) {
+    // buffers that keep their slot across the whole step
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, density_ssbo_);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, acceleration_ssbo_);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 4, cell_counts_);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 5, cell_starts_);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 6, cell_cursors_);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 7, sorted_indices_);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 8, speed_ssbo_);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 9, mid_position_ssbo_);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 10, mid_velocity_ssbo_);
+
+    const GLuint groups = (count_ + 255) / 256;
+
+    // per-frame uniforms; they persist, so both pipeline runs see them
+    force_.use();
+    force_.set_float("u_target_density", params.target_density);
+    force_.set_float("u_pressure_multiplier", params.pressure_multiplier);
+    force_.set_float("u_near_pressure_multiplier", params.near_pressure_multiplier);
+    force_.set_float("u_viscosity", params.viscosity);
+    force_.set_float("u_tension_threshold", params.tension_threshold);
+    force_.set_vec2("u_interaction_point", interaction_point_);
+    force_.set_float("u_interaction_strength", interaction_strength_);
+    force_.set_float("u_tension_strength", params.tension_strength);
+    force_.set_float("u_cohesion_strength", params.cohesion_strength);
+
+    midpoint_.use();
+    midpoint_.set_float("u_dt", delta_time);
+    midpoint_.set_float("u_gravity", params.gravity);
+
+    step_.use();
+    step_.set_float("u_dt", delta_time);
+    step_.set_float("u_gravity", params.gravity);
+
+    // RK2 stage 1: a1 at the current state, then the half-step state from it
+    compute_accelerations(position_ssbo_, velocity_ssbo_);
+
+    midpoint_.use();
+    glDispatchCompute(groups, 1, 1);
+    glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+
+    // RK2 stage 2: a2 at the midpoint state
+    compute_accelerations(mid_position_ssbo_, mid_velocity_ssbo_);
+
+    // final advance of the real state: pos moves with mid velocity, vel with a2
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, position_ssbo_);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, velocity_ssbo_);
+
+    step_.use();
+    glDispatchCompute(groups, 1, 1);
+    glMemoryBarrier(GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT);
+}
+
+// Grid rebuild + density + force at the given state; accelerations land in
+// acceleration_ssbo_. All shaders read state via slots 0/1, so evaluating at
+// the midpoint is just a matter of which buffers get bound here.
+void Simulation::compute_accelerations(GLuint positions, GLuint velocities) {
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, positions);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, velocities);
+
+    const GLuint groups = (count_ + 255) / 256;
+
+    // grid rebuild: zero counts, count, scan, scatter
+    GLuint zero = 0;
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, cell_counts_);
+    glClearBufferData(GL_SHADER_STORAGE_BUFFER, GL_R32UI, GL_RED_INTEGER, GL_UNSIGNED_INT, &zero);
+    glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+
+    count_shader_.use();
+    glDispatchCompute(groups, 1, 1);
+    glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+
+    scan_.use();
+    glDispatchCompute(1, 1, 1);  // deliberately single-invocation
+    glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+
+    scatter_.use();
+    glDispatchCompute(groups, 1, 1);
+    glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+
+    density_.use();
+    glDispatchCompute(groups, 1, 1);
+    glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);  // densities land before force reads
+
+    force_.use();
+    glDispatchCompute(groups, 1, 1);
+    glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);  // accels land before the next pass reads
+}
+
+// A NaN anywhere in the field wins the bitwise max; report "very fast" so
+// the CFL clamp drives dt to its floor instead of computing with NaN. The
+// check reads the exponent bits because -ffast-math breaks std::isfinite.
+static float_t decode_max_bits(GLuint bits) {
+    if ((bits & 0x7F800000u) == 0x7F800000u) {
+        return 1e6f;
+    }
+
+    float_t value = 0.0f;
+    std::memcpy(&value, &bits, sizeof(value));
+    return value;
+}
+
+// Reduce speeds and acceleration magnitudes to their maxima and read them
+// back. Called once per rendered frame (not per substep): one 8-byte
+// transfer, and the stall it causes is mostly hidden behind vsync. The
+// values are one frame stale, which is fine - dt reacts a frame late, and
+// the CFL safety factors absorb that.
+glm::vec2 Simulation::max_kinematics() {
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, acceleration_ssbo_);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 8, speed_ssbo_);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 11, max_kinematics_ssbo_);
+
+    GLuint zero = 0;
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, max_kinematics_ssbo_);
+    glClearBufferData(GL_SHADER_STORAGE_BUFFER, GL_R32UI, GL_RED_INTEGER, GL_UNSIGNED_INT, &zero);
+    glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+
+    reduce_max_.use();
+    glDispatchCompute((count_ + 255) / 256, 1, 1);
+    glMemoryBarrier(GL_BUFFER_UPDATE_BARRIER_BIT);  // atomics land before the readback
+
+    GLuint bits[2] = {0, 0};
+    glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, sizeof(bits), bits);
+
+    return glm::vec2(decode_max_bits(bits[0]), decode_max_bits(bits[1]));
+}
+
+void Simulation::spawn_particles(bool is_random) {
+    if (is_random) {
         std::random_device rd;
         uint32_t seed = rd();
         std::cout << "Seed: " << seed << "\n";
@@ -100,112 +226,25 @@ void Simulation::spawn_particles(bool random) {
     }
 }
 
-glm::vec2 Simulation::get_random_dir() const {
-    // thread_local: each TBB worker gets its own RNG so parallel calls don't race
-    static thread_local std::mt19937 rng(std::random_device{}());
-    std::uniform_real_distribution<float_t> angle(0.0f, 2.0f * static_cast<float_t>(M_PI));
-
-    // random direction angle
-    float_t phi = angle(rng);
-    return glm::vec2(std::cos(phi), std::sin(phi));
-}
-
-PressurePair Simulation::density_to_pressure(const float_t density,
-                                             const float_t near_density) const {
-    // how far off target (signed)
-    float_t pressure = (density - params_.target_density) * params_.pressure_multiplier;
-    float_t near_pressure = near_density * params_.near_pressure_multiplier;
-
-    return {pressure, near_pressure};
-}
-
-DensityPair Simulation::calculate_density_at(const glm::vec2& location) const {
-    float_t density = 0.0f;
-    float_t near_density = 0.0f;
-
-    grid_.foreach_point_within_radius(location, [&](int32_t, glm::vec2, float_t dst_sq) {
-        density += MASS * smoothing_kernel(KERNEL_RADIUS_SQ, dst_sq);
-        near_density += MASS * near_smoothing_kernel(KERNEL_RADIUS, std::sqrt(dst_sq));
-    });
-
-    return {density, near_density};
-}
-
-glm::vec2 Simulation::calculate_forces(size_t particle_index) const {
-    glm::vec2 pressure_force(0, 0);
-    glm::vec2 viscosity_force(0, 0);
-
-    grid_.foreach_point_within_radius(
-        predicted_positions_[particle_index], [&](int32_t j, glm::vec2 offset, float_t dst_sq) {
-            if (particle_index == static_cast<size_t>(j)) {
-                return;
-            }
-
-            // predicted geometry
-            float_t distance = std::sqrt(dst_sq);
-            glm::vec2 norm_dir = distance < 1e-6f ? get_random_dir() : offset / distance;
-
-            // pressure (regular and near)
-            float_t slope = spiky_kernel_derivative(KERNEL_RADIUS, distance);
-            float_t near_slope = near_spiky_kernel_derivative(KERNEL_RADIUS, distance);
-
-            // scalars stay real
-            float_t shared_pressure =
-                calculate_shared_pressure(fields_[j].pressure, fields_[particle_index].pressure);
-            float_t near_shared_pressure = calculate_shared_pressure(
-                fields_[j].near_pressure, fields_[particle_index].near_pressure);
-
-            float_t inv_density_j = 1.0f / fields_[j].density;
-
-            pressure_force +=
-                norm_dir * MASS * (shared_pressure * slope + near_shared_pressure * near_slope);
-
-            float_t influence = viscosity_kernel_laplacian(KERNEL_RADIUS, distance);
-            viscosity_force += (sample_velocities_[j] - sample_velocities_[particle_index]) *
-                               influence * MASS * inv_density_j;
-        });
-
-    return pressure_force + (viscosity_force * params_.viscosity);
-}
-
-/// @brief Calculates the shared pressure between two densities;
-/// @param pressure_a Pressure of first particle
-/// @param pressure_b Pressure of second particle
-/// @return Average between the two pressure values
-float_t Simulation::calculate_shared_pressure(const float_t pressure_a,
-                                              const float_t pressure_b) const {
-    return (pressure_a + pressure_b) * 0.5f;
-}
-
 void Simulation::create_particles() {
-    particles_.clear();
-    particles_.reserve(NUM_PARTICLES);
+    std::vector<glm::vec2> positions;
+    positions.reserve(count_);
 
-    // Lay the particles out as a centered square block. ceil(sqrt(N)) per side is
-    // the squarest grid that holds N. Spacing is derived from the domain so the
-    // block always fits and packs tighter as N grows, so no hand-tuning per count.
+    // Centered square block, same layout as the CPU sim: ceil(sqrt(N)) per
+    // side, spacing derived from the domain so the block always fits. The
+    // buffers are fixed at count_, so stop there instead of filling the grid.
     const int32_t per_row =
-        static_cast<int32_t>(std::ceil(std::sqrt(static_cast<float_t>(NUM_PARTICLES))));
+        static_cast<int32_t>(std::ceil(std::sqrt(static_cast<float_t>(count_))));
     const float_t spacing = (DOMAIN_MAX - DOMAIN_MIN) * 0.6f / per_row;
-    const float_t offset = (per_row - 1) * spacing * 0.5f;  // half block width -> centers on origin
+    const float_t offset = (per_row - 1) * spacing * 0.5f;
 
-    for (int32_t row = 0; row < per_row; ++row) {
-        for (int32_t col = 0; col < per_row; ++col) {
-            Particle p{};
-            p.position = glm::vec2(col * spacing - offset, row * spacing - offset);
-            particles_.push_back(p);
+    for (int32_t row = 0; row < per_row && positions.size() < count_; ++row) {
+        for (int32_t col = 0; col < per_row && positions.size() < count_; ++col) {
+            positions.emplace_back(col * spacing - offset, row * spacing - offset);
         }
     }
 
-    predicted_positions_.resize(particles_.size());
-    fields_.resize(particles_.size());
-    sample_velocities_.resize(particles_.size());
-    cur_pos_.resize(particles_.size());
-    cur_vel_.resize(particles_.size());
-    mid_pos_.resize(particles_.size());
-    mid_vel_.resize(particles_.size());
-    accel1_.resize(particles_.size());
-    accel2_.resize(particles_.size());
+    upload_state(positions);
 }
 
 void Simulation::create_particles(uint32_t seed) {
@@ -214,42 +253,71 @@ void Simulation::create_particles(uint32_t seed) {
 
     const float_t bound_size = DOMAIN_MAX - DOMAIN_MIN;
 
-    particles_.clear();
-    particles_.reserve(NUM_PARTICLES);
+    std::vector<glm::vec2> positions;
+    positions.reserve(count_);
 
-    for (uint32_t i = 0; i < NUM_PARTICLES; ++i) {
-        Particle p{};
-
-        p.position = glm::vec2(dist(rng) * bound_size, dist(rng) * bound_size);
-        particles_.push_back(p);
+    for (uint32_t i = 0; i < count_; ++i) {
+        positions.emplace_back(dist(rng) * bound_size, dist(rng) * bound_size);
     }
 
-    predicted_positions_.resize(particles_.size());
-    fields_.resize(particles_.size());
-    sample_velocities_.resize(particles_.size());
-    cur_pos_.resize(particles_.size());
-    cur_vel_.resize(particles_.size());
-    mid_pos_.resize(particles_.size());
-    mid_vel_.resize(particles_.size());
-    accel1_.resize(particles_.size());
-    accel2_.resize(particles_.size());
+    upload_state(positions);
 }
 
-glm::vec2 Simulation::interaction_force(glm::vec2 position, glm::vec2 velocity,
-                                        glm::vec2 input_position, float_t radius,
-                                        float_t strength) const {
-    glm::vec2 force(0.0f, 0.0f);
-    glm::vec2 offset = input_position - position;
-    float_t dst_sq = glm::dot(offset, offset);
+void Simulation::upload_state(const std::vector<glm::vec2>& positions) {
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, position_ssbo_);
+    glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, count_ * sizeof(glm::vec2), positions.data());
 
-    const float_t r_sq = radius * radius;
+    // Velocities start at rest on every (re)spawn.
+    std::vector<glm::vec2> zeros(count_, glm::vec2(0.0f));
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, velocity_ssbo_);
+    glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, count_ * sizeof(glm::vec2), zeros.data());
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
 
-    if (dst_sq < r_sq) {
-        float_t dst = std::sqrt(dst_sq);
-        glm::vec2 dir = dst <= 1e-6f ? glm::vec2(0.0f) : offset / dst;
-        float_t falloff = 1.0f - (dst / radius);  // 1 at center; 0 at edge
+    // Speeds are per-particle state too: clear them so a fresh spawn
+    // renders calm instead of wearing the previous frame's colors.
+    float_t zero = 0.0f;
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, speed_ssbo_);
+    glClearBufferData(GL_SHADER_STORAGE_BUFFER, GL_R32F, GL_RED, GL_FLOAT, &zero);
+}
 
-        force = (dir * strength - velocity) * falloff;
+void Simulation::set_static_uniforms() {
+    const glm::vec2 origin(-DOMAIN_HALF_X, DOMAIN_MIN);
+
+    for (Shader* s : {&count_shader_, &scatter_, &density_, &force_}) {
+        s->use();  // uniforms go to the *currently bound* program
+        s->set_uint("u_num_particles", count_);
+        s->set_vec2("u_grid_origin", origin);
+        s->set_float("u_cell_size", CELL_SIZE);
+        s->set_int("u_grid_w", GRID_W);
+        s->set_int("u_grid_h", GRID_H);
     }
-    return force;
+
+    scan_.use();
+    scan_.set_int("u_num_cells", NUM_CELLS);
+
+    midpoint_.use();
+    midpoint_.set_uint("u_num_particles", count_);
+
+    reduce_max_.use();
+    reduce_max_.set_uint("u_num_particles", count_);
+
+    density_.use();
+    density_.set_float("u_kernel_radius", KERNEL_RADIUS);
+    density_.set_float("u_kernel_radius_sq", KERNEL_RADIUS_SQ);
+    density_.set_float("u_mass", MASS);
+
+    force_.use();
+    force_.set_float("u_kernel_radius", KERNEL_RADIUS);
+    force_.set_float("u_kernel_radius_sq", KERNEL_RADIUS_SQ);
+    force_.set_float("u_mass", MASS);
+    force_.set_float("u_interaction_radius", INTERACTION_RADIUS);
+
+    step_.use();
+    step_.set_uint("u_num_particles", count_);
+    step_.set_float("u_domain_half_x", DOMAIN_HALF_X);
+    step_.set_float("u_domain_min", DOMAIN_MIN);
+    step_.set_float("u_domain_max", DOMAIN_MAX);
+    step_.set_float("u_bounce_damping", BOUNCE_DAMPING);
+    step_.set_float("u_eps", EPS);
+    step_.set_float("u_max_speed", MAX_SPEED);
 }

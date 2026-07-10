@@ -1,13 +1,16 @@
-add_executable(fluid_simulation main.cc simulation.cc renderer.cc shader.cc spacial_grid.cc debug_gui.cc)
+# CONFIGURE_DEPENDS re-runs the glob at build time, so new .cc files are
+# picked up without editing this file.
+file(GLOB SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/*.cc)
 
-find_package(TBB REQUIRED)
+add_executable(fluid_simulation ${SOURCES})
+
+target_include_directories(fluid_simulation PRIVATE ${CMAKE_SOURCE_DIR}/include)
 
 target_link_libraries(fluid_simulation PRIVATE
     glfw
     glad
     glm::glm
     OpenGL::GL
-    TBB::tbb
     imgui
 )
 
