@@ -23,6 +23,7 @@ public:
     // stepped frame (GPU reduction + 8-byte readback). Feeds the two CFL
     // conditions that adapt dt.
     glm::vec2 max_kinematics();
+    void debug_density_stats();
 
     void set_interaction(glm::vec2 point, float_t strength) {
         interaction_point_ = point;

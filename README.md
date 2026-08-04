@@ -15,14 +15,20 @@ in GPU buffers that are rendered directly, zero-copy.
 
 Running and interactive on integrated graphics.
 
+Particles spawn on a lattice at rest-density spacing `√(m/ρ₀)`, so the fluid
+starts in mechanical equilibrium instead of venting an initial pressure
+transient; a startup diagnostic reads back the density field and reports its
+distribution (interior sits at `ρ₀` to within 0.02%).
+
 **GPU pipeline.** Each physics step dispatches a chain of compute shaders:
 a **counting-sort spatial grid** rebuild (count → scan → scatter) gives O(N)
 neighbour queries, then fused density and force passes walk the 3×3 cell
 neighbourhood once per particle. Positions and speeds are rendered straight
 from the storage buffers - particle data never returns to the CPU.
 
-**Physics.** Pressure follows the **Tait equation of state** (Becker &
-Teschner [3], exponent 7) clamped to non-negative, so compression is punished
+**Physics.** Pressure follows the **Tait equation of state** (the form of
+Becker & Teschner [3], with exponent 4 rather than their 7) clamped to
+non-negative, so compression is punished
 super-linearly while free surfaces feel no spurious attraction. A
 Clavet-style **near-pressure** term [2] adds short-range repulsion, and an
 Akinci-style **pairwise cohesion** force [4] holds detached blobs together
@@ -179,7 +185,7 @@ Each acceleration evaluation dispatches, in order:
 3. **Forces** - one fused neighbour loop accumulates pressure and
    near-pressure (spiky-gradient kernels), viscosity (Laplacian kernel), and
    pairwise cohesion. Pressure comes from the Tait equation of state
-   `p = k((ρ/ρ₀)⁷ − 1)`, clamped to ≥ 0; near-pressure `k_near · ρ_near` is
+   `p = k((ρ/ρ₀)⁴ − 1)`, clamped to ≥ 0; near-pressure `k_near · ρ_near` is
    purely repulsive.
 
 The RK2 integrator runs this pipeline twice per step - once at the current

@@ -5,6 +5,8 @@
 #include <iostream>
 #include <random>
 
+#include <algorithm>
+
 #include "defs.hpp"
 
 Simulation::Simulation(uint32_t count)
@@ -224,6 +226,8 @@ void Simulation::spawn_particles(bool is_random) {
     } else {
         create_particles();
     }
+
+    debug_density_stats();
 }
 
 void Simulation::create_particles() {
@@ -235,7 +239,7 @@ void Simulation::create_particles() {
     // buffers are fixed at count_, so stop there instead of filling the grid.
     const int32_t per_row =
         static_cast<int32_t>(std::ceil(std::sqrt(static_cast<float_t>(count_))));
-    const float_t spacing = (DOMAIN_MAX - DOMAIN_MIN) * 0.6f / per_row;
+    const float_t spacing = std::sqrt(MASS / TARGET_DENSITY);
     const float_t offset = (per_row - 1) * spacing * 0.5f;
 
     for (int32_t row = 0; row < per_row && positions.size() < count_; ++row) {
@@ -320,4 +324,32 @@ void Simulation::set_static_uniforms() {
     step_.set_float("u_bounce_damping", BOUNCE_DAMPING);
     step_.set_float("u_eps", EPS);
     step_.set_float("u_max_speed", MAX_SPEED);
+}
+
+// One-shot diagnostic: run the pipeline at the current state and report the
+// density distribution. Interior particles should sit at TARGET_DENSITY.
+void Simulation::debug_density_stats() {
+    // Slots 2-7 are normally bound at the top of step(); this may run before
+    // any step, so the grid/density/force chain needs them bound here too.
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, density_ssbo_);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, acceleration_ssbo_);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 4, cell_counts_);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 5, cell_starts_);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 6, cell_cursors_);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 7, sorted_indices_);
+
+    compute_accelerations(position_ssbo_, velocity_ssbo_);
+    glMemoryBarrier(GL_BUFFER_UPDATE_BARRIER_BIT);  // densities land before readback
+
+    std::vector<glm::vec2> densities(count_);
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, density_ssbo_);
+    glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, count_ * sizeof(glm::vec2), densities.data());
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+
+    std::vector<float_t> rho(count_);
+    for (uint32_t i = 0; i < count_; ++i) rho[i] = densities[i].x;
+    std::sort(rho.begin(), rho.end());
+
+    std::cout << "density  min=" << rho.front() << "  median=" << rho[count_ / 2]
+              << "  p90=" << rho[(count_ * 9) / 10] << "  max=" << rho.back() << std::endl;
 }
