@@ -80,3 +80,4 @@ imgui.ini
 
 # local gnuplot visualization scripts
 *.plt
+run.csv

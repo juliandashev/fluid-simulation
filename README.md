@@ -43,6 +43,10 @@ conditions [3, 6] shrink `dt` when the flow gets violent - stiff moments run in
 brief slow-motion instead of exploding. A hard velocity cap in the
 integration shader acts as a final firewall against NaN blow-ups.
 
+**Measurement.** Each run writes `run.csv` (step, sim time, dt, max
+speed/acceleration, sampled every 4th step); `gnuplot dt.plt` plots the
+adaptive-dt trace of the last run.
+
 **Interaction & tooling.** Drag with the mouse to push or pull the fluid,
 pause and step/rewind through a GPU-resident history buffer, and tune the
 physics live - gravity, pressure, rest density, near-pressure, viscosity,

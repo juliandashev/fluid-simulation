@@ -12,6 +12,7 @@
 #include "input.hpp"
 #include "renderer.hpp"
 #include "simulation.hpp"
+#include "logger.hpp"
 
 // convert pixels (top-left, y-down) to world uints
 // inverting the vertex shader's transform
@@ -74,6 +75,7 @@ int main() {
         // Live parameter panel. RAII: owns the ImGui context for this scope, so
         // it tears down while the GL context is still current (like Renderer).
         DebugGui gui(window);
+        Logger logger("run.csv");
 
         // Controlling space
         Input input(window);
@@ -89,7 +91,10 @@ int main() {
         double_t fps_timer = glfwGetTime();
         double_t elapsed = 0;
         double_t fps = 0;
+        double_t sim_time = 0.0;
+
         int32_t frame_count = 0;
+        uint64_t step_count = 0;
 
         while (!glfwWindowShouldClose(window)) {
             glfwPollEvents();
@@ -169,11 +174,15 @@ int main() {
 
                 int32_t steps = 0;
                 while (accumulator >= dt && steps < MAX_SUBSTEPS) {
-                    history.save(sim.position_buffer(), sim.velocity_buffer(),
-                                 sim.speed_buffer());
+                    history.save(sim.position_buffer(), sim.velocity_buffer(), sim.speed_buffer());
                     sim.step(dt, params);
                     accumulator -= dt;
                     ++steps;
+
+                    sim_time += dt;
+                    if (step_count++ % 4 == 0) {
+                        logger.log(step_count, sim_time, dt, kin.x, kin.y);
+                    }
                 }
 
                 if (accumulator >= dt) {
@@ -182,8 +191,7 @@ int main() {
 
             } else {
                 if (step_fwd) {
-                    history.save(sim.position_buffer(), sim.velocity_buffer(),
-                                 sim.speed_buffer());
+                    history.save(sim.position_buffer(), sim.velocity_buffer(), sim.speed_buffer());
                     sim.step(dt, params);
                 }
 
@@ -196,8 +204,7 @@ int main() {
             glClearColor(0.02f, 0.04f, 0.10f, 1.0f);
             glClear(GL_COLOR_BUFFER_BIT);
 
-            renderer.render(sim.position_buffer(), sim.speed_buffer(),
-                                   sim.count());
+            renderer.render(sim.position_buffer(), sim.speed_buffer(), sim.count());
 
             if (interacting) {
                 renderer.draw_circle(world, INTERACTION_RADIUS, glm::vec3(1.0f, 0.2f, 0.2f));
