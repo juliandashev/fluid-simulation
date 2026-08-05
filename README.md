@@ -33,15 +33,18 @@ super-linearly while free surfaces feel no spurious attraction. A
 Clavet-style **near-pressure** term [2] adds short-range repulsion, and an
 Akinci-style **pairwise cohesion** force [4] holds detached blobs together
 and pinches separating fluid into droplets. Müller color-field surface
-tension [1] is also implemented (off by default). Gravity is on - the fluid
-falls, pools, splashes, and settles.
+tension [1] rounds free surfaces and holds grabbed fluid in a blob. Gravity
+is on - the fluid falls, pools, splashes, and settles.
 
 **Integration and stability.** A **midpoint (RK2)** integrator evaluates the
 full pipeline twice per step. The timestep is **adaptive**: a GPU reduction
 finds the maximum particle speed and acceleration each frame, and two CFL
 conditions [3, 6] shrink `dt` when the flow gets violent - stiff moments run in
 brief slow-motion instead of exploding. A hard velocity cap in the
-integration shader acts as a final firewall against NaN blow-ups.
+integration shader acts as a final firewall against NaN blow-ups, and
+explicit NaN/inf guards on velocity and position rescue any particle that
+slips through - a bad step costs a particle its momentum, never the
+simulation its stability.
 
 **Measurement.** Each run writes `run.csv` (step, sim time, dt, max
 speed/acceleration, sampled every 4th step); `gnuplot dt.plt` plots the

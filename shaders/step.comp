@@ -44,6 +44,13 @@ void main() {
     velocity += (vec2(0.0, u_gravity) + accelerations[i]) * u_dt;
     position += mid_velocities[i] * u_dt;
 
+    // A NaN position never un-NaNs (comparisons below are all false for it)
+    // and zeroes its density, spraying inf at every neighbor - rescue it.
+    if (isnan(position.x) || isnan(position.y)) {
+        position = vec2(0.0);
+        velocity = vec2(0.0);
+    }
+
     if (position.x < -u_domain_half_x + u_eps) {
         position.x = -u_domain_half_x + u_eps;
         velocity.x *= u_bounce_damping;
@@ -64,7 +71,10 @@ void main() {
     // toward infinity, so a force spike can never snowball into NaN. The
     // CFL-adapted dt catches up a frame later and restores accuracy.
     float speed = length(velocity);
-    if (speed > u_max_speed) {
+    if (isnan(speed) || isinf(speed)) {
+        velocity = vec2(0.0);          // particle survives, loses momentum
+        speed = 0.0;
+    } else if (speed > u_max_speed) {
         velocity *= u_max_speed / speed;
         speed = u_max_speed;
     }

@@ -234,8 +234,9 @@ void Simulation::create_particles() {
     std::vector<glm::vec2> positions;
     positions.reserve(count_);
 
-    // Centered square block, same layout as the CPU sim: ceil(sqrt(N)) per
-    // side, spacing derived from the domain so the block always fits. The
+    // Centered square block: ceil(sqrt(N)) per side, spaced at the
+    // rest-density lattice pitch sqrt(m/rho_0) so the fluid spawns in
+    // mechanical equilibrium instead of venting a pressure transient. The
     // buffers are fixed at count_, so stop there instead of filling the grid.
     const int32_t per_row =
         static_cast<int32_t>(std::ceil(std::sqrt(static_cast<float_t>(count_))));

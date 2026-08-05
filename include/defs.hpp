@@ -19,17 +19,17 @@ constexpr float_t KERNEL_RADIUS_SQ = KERNEL_RADIUS * KERNEL_RADIUS;
 constexpr float_t MASS = 1.0f;
 constexpr float_t TARGET_DENSITY = 0.9f;              // rho_0 (rest density)
 constexpr float_t PRESSURE_MULTIPLIER = 250.0f;       // k (gas constant)
-constexpr float_t NEAR_PRESSURE_MULTIPLIER = 300.0f;  // k_near
+constexpr float_t NEAR_PRESSURE_MULTIPLIER = 150.0f;  // k_near
 constexpr float_t VISCOSITY = 3.14f;
 constexpr float_t GRAVITY = -9.81f;
-constexpr float_t SURFACE_TENSION = 0.2f;           // detection threshold
-constexpr float_t SURFACE_TENSION_STRENGTH = 0.0f;  // 0 = off
-constexpr float_t COHESION_STRENGTH = 350.0f;       // Akinci pairwise cohesion
-constexpr float_t DT = 0.015f;                      // integration time step (adaptive ceiling)
-constexpr float_t DT_MIN = 0.001f;                  // adaptive floor; NaN spikes land here
-constexpr float_t CFL_LAMBDA = 0.4f;                // max kernel-radius fraction crossed per step
-constexpr float_t CFL_LAMBDA_FORCE = 0.25f;         // safety factor of the acceleration condition
-constexpr float_t MAX_SPEED = 200.0f;               // hard velocity cap; firewall against NaN
+constexpr float_t SURFACE_TENSION = 0.0f;            // detection threshold
+constexpr float_t SURFACE_TENSION_STRENGTH = 20.0f;  // 0 = off
+constexpr float_t COHESION_STRENGTH = 50.0f;         // Akinci pairwise cohesion
+constexpr float_t DT = 0.015f;                       // integration time step (adaptive ceiling)
+constexpr float_t DT_MIN = 0.001f;                   // adaptive floor; NaN spikes land here
+constexpr float_t CFL_LAMBDA = 0.4f;                 // max kernel-radius fraction crossed per step
+constexpr float_t CFL_LAMBDA_FORCE = 0.25f;          // safety factor of the acceleration condition
+constexpr float_t MAX_SPEED = 200.0f;                // hard velocity cap; firewall against NaN
 constexpr float_t TIME_SCALE = 2.0f;
 constexpr int32_t MAX_SUBSTEPS = 5;  // cap of how many physics steps run per rendered frame
 
