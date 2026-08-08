@@ -47,16 +47,66 @@ slips through - a bad step costs a particle its momentum, never the
 simulation its stability.
 
 **Measurement.** Each run writes `run.csv` (step, sim time, dt, max
-speed/acceleration, sampled every 4th step); `gnuplot dt.plt` plots the
-adaptive-dt trace of the last run.
+speed/acceleration, sampled every 4th step); `gnuplot dt.plt` plots it against
+the two CFL candidate timesteps, so the trace shows *which* condition is
+limiting `dt` at each moment rather than just the result. Over a 477 s run the
+velocity condition never once bound `dt` while the acceleration condition bound
+it in 5.5% of frames.
+
+**Validation.** The solver is being checked against the planar **dam break**
+benchmark [8, 9]: a column of width `a` and height `n·a` is released against the
+left wall (`DAM_BREAK_MODE` in `defs.hpp`) and the surge front along the floor
+is logged to `dam_break.csv` in dimensionless form, `Z = (x_front − x₀)/a`
+against `T = t·√(2g/a)`. The front is defined as a high percentile of `x` among
+particles within one kernel radius of the floor - a height gate rejects airborne
+spray, the percentile rejects lone stragglers, and a genuine surge passes both.
+Runs reproduce to three significant figures despite frame timing varying the
+`dt` sequence between them. Raw data, plotting scripts, and figures live under
+[`experiments/`](experiments/).
 
 **Interaction & tooling.** Drag with the mouse to push or pull the fluid,
 pause and step/rewind through a GPU-resident history buffer, and tune the
 physics live - gravity, pressure, rest density, near-pressure, viscosity,
 tension, cohesion, timestep, and time scale - through a Dear ImGui panel.
 
-Next up: PCISPH (predictive-corrective pressure solve [5]), which trades the
-stiff equation of state for an iterative solver and larger timesteps.
+### Working on now
+
+Quantitative validation rather than new physics. The dam break gives a curve
+with a known shape to compare against, which turns "it looks like water" into a
+measurable distance from published data. Two parameter studies are done:
+
+- **Cohesion sweep.** Cohesion 50 roughly doubles how long the column holds
+  itself up before collapsing; below 20 the effect saturates and 0, 5 and 20 are
+  almost indistinguishable. The sustained collapse rate barely moves (61-65% of
+  the inviscid bound), so cohesion restrains the onset rather than acting as
+  ongoing drag. A residual delay survives at zero cohesion and is not yet
+  explained.
+- **Artificial viscosity.** It is the only term in the force model that
+  dissipates energy. Removing it raises median peak acceleration 9.9×, holds
+  `dt` below its ceiling in 93.5% of frames instead of 5%, and produces
+  non-finite values the NaN firewall has to catch. The solver does not explode -
+  it quietly runs at a third of the timestep and diverges.
+
+### Later
+
+- **Compare against experiment.** Martin & Moyce [8] and Koshizuka & Oka [9]
+  both publish front-position data for the planar dam break; the plotting script
+  is ready for a digitised dataset. Currently the only reference is the Ritter
+  inviscid bound, which the measured front correctly stays below.
+- **Viscosity sweep**, to explain the residual delay the cohesion sweep left
+  unaccounted for.
+- **Move to 3D.** The neighbour count forces the kernel radius down from 4.0 to
+  roughly 2.2, and cohesion scales as `h⁶`, so every tuned constant changes by
+  more than an order of magnitude. Validation work ports unchanged; tuning does
+  not - which is why the benchmarks come first.
+- **Express parameters as dimensionless groups** (a Bond number for cohesion, a
+  Reynolds-like number for viscosity) so they survive a resolution change
+  instead of being silently tied to `h = 4.0`.
+- **PCISPH** (predictive-corrective pressure solve [5]), trading the stiff
+  equation of state for an iterative solver and larger timesteps.
+- **Thermal transport.** Per-particle internal energy with SPH heat conduction
+  [11] and buoyancy coupling, aiming at natural convection - a liquid application
+  with an analytic onset to validate against.
 
 ## Performance
 
@@ -164,6 +214,7 @@ include/
   simulation.hpp   - Simulation class interface
   history.hpp      - GPU-resident ring buffer of past states for rewind
   input.hpp        - keyboard/mouse polling helpers
+  dam_break.hpp    - surge-front criterion + benchmark logging
   (+ headers for the .cc files above)
 shaders/
   count.comp       - counting sort 1/3: histogram of particles per cell
@@ -177,6 +228,7 @@ shaders/
   particle.vert/.frag - point-sprite rendering, coloured by speed
   line.vert/.frag  - debug line/circle rendering
 external/glad/     - bundled OpenGL loader
+experiments/       - benchmark data, gnuplot scripts, and figures
 CMakeLists.txt     - top-level build (fetches GLFW/GLM/ImGui, builds GLAD)
 run.sh             - build helper functions
 ```
@@ -238,6 +290,20 @@ simulation stays deterministic through frame-rate spikes.
   Fluids and Solids*, Eurographics Tutorial 2019.
   [PDF](https://sph-tutorial.physics-simulation.org/pdf/SPH_Tutorial.pdf) -
   survey of modern SPH: kernels, WCSPH, PCISPH, and beyond.
+
+- [8] J. C. Martin, W. J. Moyce - *An Experimental Study of the Collapse of
+  Liquid Columns on a Rigid Horizontal Plane*, Philosophical Transactions of
+  the Royal Society A 244, 1952 - the planar dam break front-position data the
+  benchmark is measured against.
+- [9] S. Koshizuka, Y. Oka - *Moving-Particle Semi-implicit Method for
+  Fragmentation of Incompressible Fluid*, Nuclear Science and Engineering 123,
+  1996 - the second standard dam break reference dataset.
+- [10] A. Ritter - *Die Fortpflanzung der Wasserwellen*, Zeitschrift des
+  Vereines Deutscher Ingenieure 36, 1892 - the shallow-water dam break
+  solution used as the inviscid upper bound on the surge front.
+- [11] P. W. Cleary, J. J. Monaghan - *Conduction Modelling Using Smoothed
+  Particle Hydrodynamics*, Journal of Computational Physics 148, 1999 - the
+  pairwise-antisymmetric heat conduction form planned for thermal transport.
 
 **Further reading** (consulted, not directly used):
 
