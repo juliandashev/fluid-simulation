@@ -51,15 +51,21 @@ struct SimParams {
 // Domain bounds
 constexpr float_t DOMAIN_MAX = 60.0f;
 constexpr float_t DOMAIN_MIN = -DOMAIN_MAX;
-constexpr float_t BOUNCE_DAMPING = -0.9f;
+constexpr float_t BOUNCE_DAMPING = -0.1f;
 constexpr float_t WINDOW_ASPECT = 1280.0f / 720.0f;
-constexpr float_t DOMAIN_HALF_X = DOMAIN_MAX * WINDOW_ASPECT;  // ≈ 71, matches the window
+constexpr float_t DOMAIN_HALF_X = DOMAIN_MAX * WINDOW_ASPECT;  // ≈ 107, matches the window
 constexpr float_t EPS = 1.0f;                                  // boundary epsilon
+
+// Dam break benchmark (Martin & Moyce 1952, planar case; Koshizuka & Oka 1996).
+// A column of width a and height n*a is released against the left wall at t=0;
+// the surge front position is logged and compared to the published curve.
+constexpr bool DAM_BREAK_MODE = true;  // spawn the column instead of the centered block
+constexpr float_t DAM_ASPECT = 2.5f;   // n = height/width of the initial column
 
 // Spatial constats
 constexpr float_t CELL_SIZE = KERNEL_RADIUS;  // h - guarantees 3×3 covers all neighbors
 
 // spatial grid dimensions
-constexpr int32_t GRID_W = static_cast<int32_t>(2.0f * DOMAIN_HALF_X / CELL_SIZE) + 1;       // ~36
-constexpr int32_t GRID_H = static_cast<int32_t>((DOMAIN_MAX - DOMAIN_MIN) / CELL_SIZE) + 1;  // ~26
-constexpr int32_t NUM_CELLS = GRID_W * GRID_H;                                               // ~950
+constexpr int32_t GRID_W = static_cast<int32_t>(2.0f * DOMAIN_HALF_X / CELL_SIZE) + 1;       // ~54
+constexpr int32_t GRID_H = static_cast<int32_t>((DOMAIN_MAX - DOMAIN_MIN) / CELL_SIZE) + 1;  // ~31
+constexpr int32_t NUM_CELLS = GRID_W * GRID_H;                                               // ~1674
