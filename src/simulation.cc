@@ -217,20 +217,20 @@ glm::vec2 Simulation::max_kinematics() {
     return glm::vec2(decode_max_bits(bits[0]), decode_max_bits(bits[1]));
 }
 
-void Simulation::spawn_particles(bool is_random) {
+void Simulation::spawn_particles(bool is_random, float_t rest_density) {
     if (is_random) {
         std::random_device rd;
         uint32_t seed = rd();
         std::cout << "Seed: " << seed << "\n";
         create_particles(seed);
     } else {
-        create_particles();
+        create_particles(rest_density);
     }
 
     debug_density_stats();
 }
 
-void Simulation::create_particles() {
+void Simulation::create_particles(float_t rest_density) {
     std::vector<glm::vec2> positions;
     positions.reserve(count_);
 
@@ -240,7 +240,7 @@ void Simulation::create_particles() {
     // buffers are fixed at count_, so stop there instead of filling the grid.
     const int32_t per_row =
         static_cast<int32_t>(std::ceil(std::sqrt(static_cast<float_t>(count_))));
-    const float_t spacing = std::sqrt(MASS / TARGET_DENSITY);
+    const float_t spacing = std::sqrt(MASS / rest_density);
     const float_t offset = (per_row - 1) * spacing * 0.5f;
 
     for (int32_t row = 0; row < per_row && positions.size() < count_; ++row) {
@@ -250,6 +250,64 @@ void Simulation::create_particles() {
     }
 
     upload_state(positions);
+}
+
+void Simulation::spawn_dam_break(float_t rest_density, float_t aspect) {
+    create_column(rest_density, aspect);
+    debug_density_stats();
+}
+
+// Dam break reservoir: a lattice column of aspect ratio (rows/cols) packed
+// against the left wall and standing on the floor. Same rest-density pitch as
+// the block spawn, so the column starts in mechanical equilibrium and the only
+// thing driving the flow is the removal of the (implicit) dam at t=0.
+void Simulation::create_column(float_t rest_density, float_t aspect) {
+    std::vector<glm::vec2> positions;
+    positions.reserve(count_);
+
+    const float_t spacing = std::sqrt(MASS / rest_density);
+
+    // cols*rows = count_ with rows/cols = aspect. The column must also fit
+    // inside the domain, so clamp the height first and re-derive the width -
+    // an aspect that would overflow the ceiling silently becomes a shorter,
+    // wider column rather than particles spawning out of bounds.
+    const int32_t max_rows =
+        static_cast<int32_t>((DOMAIN_MAX - DOMAIN_MIN - 2.0f * EPS) / spacing);
+
+    int32_t cols = std::max(1, static_cast<int32_t>(std::floor(
+                                   std::sqrt(static_cast<float_t>(count_) / aspect))));
+    int32_t rows = static_cast<int32_t>(std::ceil(static_cast<float_t>(count_) / cols));
+
+    if (rows > max_rows) {
+        rows = max_rows;
+        cols = static_cast<int32_t>(std::ceil(static_cast<float_t>(count_) / rows));
+        std::cout << "Dam break: aspect clamped to fit the domain (" << rows << " rows)\n";
+    }
+
+    const float_t x0 = -DOMAIN_HALF_X + EPS + 0.5f * spacing;
+    const float_t y0 = DOMAIN_MIN + EPS + 0.5f * spacing;
+
+    for (int32_t row = 0; row < rows && positions.size() < count_; ++row) {
+        for (int32_t col = 0; col < cols && positions.size() < count_; ++col) {
+            positions.emplace_back(x0 + col * spacing, y0 + row * spacing);
+        }
+    }
+
+    column_origin_x_ = x0;
+    column_width_ = cols * spacing;
+
+    std::cout << "Dam break column: a = " << column_width_ << ", height = " << rows * spacing
+              << " (" << cols << " x " << rows << " particles)\n";
+
+    upload_state(positions);
+}
+
+std::vector<glm::vec2> Simulation::read_positions() const {
+    std::vector<glm::vec2> positions(count_);
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, position_ssbo_);
+    glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, count_ * sizeof(glm::vec2), positions.data());
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+    return positions;
 }
 
 void Simulation::create_particles(uint32_t seed) {

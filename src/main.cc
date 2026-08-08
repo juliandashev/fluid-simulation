@@ -6,6 +6,7 @@
 #include <iostream>
 #include <vector>
 
+#include "dam_break.hpp"
 #include "debug_gui.hpp"
 #include "defs.hpp"
 #include "history.hpp"
@@ -68,14 +69,29 @@ int main() {
 
         bool testing = false;
 
-        sim.spawn_particles(testing);
+        Logger logger("run.csv");
+        DamBreakLogger dam_logger(dam_break_filename(params.cohesion_strength));
+
+        // One spawn path for startup and reset, so the benchmark's initial
+        // condition can never drift from the one R restores. The front log is
+        // reopened under the current cohesion, which makes a parameter sweep a
+        // single session: set a value in the panel, press R, let it run, repeat.
+        auto spawn = [&] {
+            if (DAM_BREAK_MODE) {
+                sim.spawn_dam_break(params.target_density, DAM_ASPECT);
+                dam_logger.restart(dam_break_filename(params.cohesion_strength));
+            } else {
+                sim.spawn_particles(testing, params.target_density);
+            }
+        };
+
+        spawn();
 
         Renderer renderer(NUM_PARTICLES);
 
         // Live parameter panel. RAII: owns the ImGui context for this scope, so
         // it tears down while the GL context is still current (like Renderer).
         DebugGui gui(window);
-        Logger logger("run.csv");
 
         // Controlling space
         Input input(window);
@@ -124,9 +140,10 @@ int main() {
             }
 
             if (reset) {
-                sim.spawn_particles(testing);
+                spawn();
                 history.clear();
                 accumulator = 0.0;
+                sim_time = 0.0;
             }
 
             bool interacting = !gui.wants_mouse() && (input.is_left_mouse_button_down() ||
@@ -182,6 +199,16 @@ int main() {
                     sim_time += dt;
                     if (step_count++ % 4 == 0) {
                         logger.log(step_count, sim_time, dt, kin.x, kin.y);
+
+                        // Front measurement stalls on a buffer readback, so it
+                        // rides the same cadence as the CSV rather than running
+                        // every step.
+                        if (DAM_BREAK_MODE) {
+                            const float_t origin = sim.column_origin_x();
+                            dam_logger.log(sim_time,
+                                           surge_front(sim.read_positions(), origin), origin,
+                                           sim.column_width(), params);
+                        }
                     }
                 }
 
