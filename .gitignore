@@ -81,3 +81,17 @@ imgui.ini
 # local gnuplot visualization scripts
 *.plt
 run.csv
+
+# knowledge-graph tool output (local analysis, not part of the project)
+graphify-out/
+
+# per-run logs and figures written into the working directory. The curated
+# copies under experiments/ are tracked - see the negations below.
+run*.csv
+dam_break*.csv
+/dt.png
+/dam_break*.png
+
+# the experiments archive is tracked despite the *.plt / *.csv rules above
+!experiments/
+!experiments/**
