@@ -40,7 +40,12 @@ is on - the fluid falls, pools, splashes, and settles.
 full pipeline twice per step. The timestep is **adaptive**: a GPU reduction
 finds the maximum particle speed and acceleration each frame, and two CFL
 conditions [3, 6] shrink `dt` when the flow gets violent - stiff moments run in
-brief slow-motion instead of exploding. A hard velocity cap in the
+brief slow-motion instead of exploding. A third, **acoustic** condition
+`dt ≤ λ_c·h/c` bounds it by the equation of state's own wave speed
+`c = √(4k/ρ₀)`; unlike the other two it does not depend on the flow, so it
+applies from the first step. At the stock pressure multiplier it is slack
+(0.048 against the 0.015 ceiling) and changes nothing, which is precisely why it
+had to be written down before `k` is raised. A hard velocity cap in the
 integration shader acts as a final firewall against NaN blow-ups, and
 explicit NaN/inf guards on velocity and position rescue any particle that
 slips through - a bad step costs a particle its momentum, never the
@@ -56,8 +61,11 @@ it in 5.5% of frames.
 **Validation.** The solver is being checked against the planar **dam break**
 benchmark [8, 9]: a column of width `a` and height `n·a` is released against the
 left wall (`DAM_BREAK_MODE` in `defs.hpp`) and the surge front along the floor
-is logged to `dam_break.csv` in dimensionless form, `Z = (x_front − x₀)/a`
-against `T = t·√(2g/a)`. The front is defined as a high percentile of `x` among
+is logged in dimensionless form, `Z = (x_front − x₀)/a` against `T = t·√(2g/a)`,
+to a file named after the force parameters it was run at
+(`dam_break_coh<c>_visc<v>_ten<t>.csv`, with the stiffness in a column) so a
+sweep is a single session and no two settings can land in the same file. The
+front is defined as a high percentile of `x` among
 particles within one kernel radius of the floor - a height gate rejects airborne
 spray, the percentile rejects lone stragglers, and a genuine surge passes both.
 Runs reproduce to three significant figures despite frame timing varying the
@@ -73,14 +81,48 @@ tension, cohesion, timestep, and time scale - through a Dear ImGui panel.
 
 Quantitative validation rather than new physics. The dam break gives a curve
 with a known shape to compare against, which turns "it looks like water" into a
-measurable distance from published data. Two parameter studies are done:
+measurable distance from published data. Four parameter studies are done -
+cohesion, surface tension, stiffness, viscosity - and chasing a residual through
+the first three turned it into two solver findings, one of which invalidated a
+headline from the first:
 
-- **Cohesion sweep.** Cohesion 50 roughly doubles how long the column holds
-  itself up before collapsing; below 20 the effect saturates and 0, 5 and 20 are
-  almost indistinguishable. The sustained collapse rate barely moves (61-65% of
-  the inviscid bound), so cohesion restrains the onset rather than acting as
-  ongoing drag. A residual delay survives at zero cohesion and is not yet
-  explained.
+<p align="center">
+  <img src="experiments/dam_break_sweep_k4000.png"
+       alt="Surge front vs cohesion at the converged stiffness" width="640">
+</p>
+
+- **Cohesion sweep**, run at the stock stiffness and again converged at
+  `k = 4000`. Cohesion 50 delays the onset by 2.3×, in both, and is the only
+  value that genuinely *holds* the column - its early rise goes as `T^1.70`
+  against `T^1.47-1.52` for the rest, the difference between a release and a
+  front simply accelerating from rest. Converged, cohesion 20 also separates out
+  at 1.25×, where at stock stiffness it had been indistinguishable from zero: the
+  compressible fluid's own squashing was masking it, and the saturation point is
+  between 5 and 20 rather than at 20. Past its knee the cohesion-50 curve runs
+  parallel to the others rather than staying proportionally behind, so what
+  cohesion buys is a delay and not a sustained drag - though that reading is off
+  the figure, since the front never reaches a steady speed to compare, climbing
+  monotonically from 5-14% of the inviscid bound at onset to 69-74% when it runs
+  out of tank, with no plateau in any run.
+- **Surface-tension control.** Cohesion and the Müller color-field tension are
+  separate additive terms in `force.comp`, and the sweep varied only the first -
+  `tension_strength` sat at 20 with its threshold at 0 throughout, so "cohesion
+  0" was never "no surface tension". Turning it fully off moves the onset from
+  0.229 to 0.239, less than one sample interval: the term does essentially
+  nothing here, and the residual delay is not surface tension.
+- **Stiffness sweep.** At `k = 250` the equation of state's wave speed is
+  `c = 33.3` while the front is measured at 48.5 and Ritter predicts 67.8 - the
+  benchmark was running at **Mach 1.5-2**, where weakly-compressible SPH assumes
+  0.1. Sweeping `k` over 64× to Mach 0.25 leaves the onset flat (0.239 → 0.218)
+  but converges the collapse: `T` at `Z = 2` falls 1.582 → 1.479, the last
+  quadrupling worth under 1%. So the stock stiffness costs ~6.5% on the collapse
+  rate and the answer is converged by `k ≈ 4000`.
+- **The residual delay was not real.** Invariant to cohesion below 20, to
+  tension, and to a 64× change in stiffness, because it was never a delay:
+  `T_onset` scales as `√δ` in the measurement threshold `δ`, and the early rise
+  is `Z − Z₀ ∝ T^1.45` at every `k`. That is a front accelerating from rest,
+  which crosses any threshold after a finite time. Cohesion 50 is the one run
+  that genuinely holds (`p = 1.66`), so that result stands.
 - **Artificial viscosity.** It is the only term in the force model that
   dissipates energy. Removing it raises median peak acceleration 9.9×, holds
   `dt` below its ceiling in 93.5% of frames instead of 5%, and produces
@@ -93,8 +135,18 @@ measurable distance from published data. Two parameter studies are done:
   both publish front-position data for the planar dam break; the plotting script
   is ready for a digitised dataset. Currently the only reference is the Ritter
   inviscid bound, which the measured front correctly stays below.
-- **Viscosity sweep**, to explain the residual delay the cohesion sweep left
-  unaccounted for.
+- **Cohesion 10 at `k = 4000`.** One run, and the only soft spot left in the
+  converged sweep: cohesion 20 separates from zero by 1.6 sample intervals and
+  cohesion 5 by less than half of one, so the saturation point is bracketed
+  between them but not located.
+- **A longer tank**, if the sustained collapse rate is ever to be measured. The
+  domain is 3.4 column widths wider than the column, so the front hits the far
+  wall at `Z = 4.35` while still accelerating. Onset questions are answerable as
+  things stand; asymptotic-rate questions are not.
+- **Viscosity sweep**, the standing hypothesis for the residual delay before the
+  Mach number turned up. Worth much less now: viscous force is a velocity
+  difference and so is identically zero while the column is at rest, which is
+  exactly when the delay happens.
 - **Move to 3D.** The neighbour count forces the kernel radius down from 4.0 to
   roughly 2.2, and cohesion scales as `h⁶`, so every tuned constant changes by
   more than an order of magnitude. Validation work ports unchanged; tuning does
@@ -253,8 +305,11 @@ velocity and velocity from the midpoint acceleration, with reflective box
 boundaries and a hard speed cap.
 
 Between frames, a GPU reduction reads back the maximum speed and acceleration
-magnitude, and the CFL conditions `dt ≤ λ·h/v_max` and `dt ≤ λ_f·√(h/a_max)`
-pick the largest safe timestep, floored and ceilinged in `defs.hpp`. The
+magnitude, and the CFL conditions `dt ≤ λ·h/v_max`, `dt ≤ λ_f·√(h/a_max)` and
+`dt ≤ λ_c·h/c` pick the largest safe timestep, floored and ceilinged in
+`defs.hpp`. The floor wins that clamp, so a stiff enough EOS is under-resolved
+rather than slow - `main.cc` warns once when the acoustic condition asks for
+less than `DT_MIN`, since nothing else in the run would say so. The
 frame loop feeds physics steps from a fixed-timestep accumulator, so the
 simulation stays deterministic through frame-rate spikes.
 
