@@ -95,3 +95,9 @@ dam_break*.csv
 # the experiments archive is tracked despite the *.plt / *.csv rules above
 !experiments/
 !experiments/**
+
+# ... except for what a run started from inside experiments/ drops there. The
+# archived run_visc*.csv are curated copies; a bare run.csv is whatever the last
+# session happened to log, and imgui.ini is per-user window layout.
+experiments/imgui.ini
+experiments/run.csv
