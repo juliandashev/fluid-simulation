@@ -26,6 +26,7 @@ public:
     // Geometry of the last spawned dam column - the reference length the
     // benchmark nondimensionalises against.
     float_t column_width() const { return column_width_; }
+    float_t column_height() const { return column_height_; }
     float_t column_origin_x() const { return column_origin_x_; }
 
     // Host copy of the current positions. Stalls the pipeline, so call it at
@@ -85,6 +86,7 @@ private:
     uint32_t count_ = 0;
 
     float_t column_width_ = 0.0f;     // a, set by create_column
+    float_t column_height_ = 0.0f;    // n*a as realised, after the row clamp
     float_t column_origin_x_ = 0.0f;  // left face of the column at t=0
 
     glm::vec2 interaction_point_{0.0f};

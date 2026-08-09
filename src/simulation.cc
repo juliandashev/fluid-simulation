@@ -295,8 +295,9 @@ void Simulation::create_column(float_t rest_density, float_t aspect) {
 
     column_origin_x_ = x0;
     column_width_ = cols * spacing;
+    column_height_ = rows * spacing;
 
-    std::cout << "Dam break column: a = " << column_width_ << ", height = " << rows * spacing
+    std::cout << "Dam break column: a = " << column_width_ << ", height = " << column_height_
               << " (" << cols << " x " << rows << " particles)\n";
 
     upload_state(positions);

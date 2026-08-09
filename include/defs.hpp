@@ -29,6 +29,7 @@ constexpr float_t DT = 0.015f;                       // integration time step (a
 constexpr float_t DT_MIN = 0.001f;                   // adaptive floor; NaN spikes land here
 constexpr float_t CFL_LAMBDA = 0.4f;                 // max kernel-radius fraction crossed per step
 constexpr float_t CFL_LAMBDA_FORCE = 0.25f;          // safety factor of the acceleration condition
+constexpr float_t CFL_LAMBDA_SOUND = 0.4f;           // same, for the pressure wave
 constexpr float_t MAX_SPEED = 200.0f;                // hard velocity cap; firewall against NaN
 constexpr float_t TIME_SCALE = 2.0f;
 constexpr int32_t MAX_SUBSTEPS = 5;  // cap of how many physics steps run per rendered frame
@@ -47,6 +48,29 @@ struct SimParams {
     float_t tension_strength = SURFACE_TENSION_STRENGTH;
     float_t cohesion_strength = COHESION_STRENGTH;
 };
+
+// Numerical speed of sound implied by the equation of state.
+//
+// force.comp prices pressure as p = k((rho/rho_0)^4 - 1), so the stiffness the
+// solver actually feels is c^2 = dp/drho at rest density = 4k/rho_0. This is
+// not a physical sound speed - it is a free parameter chosen to make the fluid
+// stiff enough that density stays near rho_0 - and the weakly-compressible
+// assumption is that the flow stays well below it. Ten to one is the usual
+// rule; at Mach 1 the "incompressible" fluid is a gas.
+//
+// The exponent 4 is duplicated from force.comp:72. Changing it there without
+// changing it here leaves the acoustic timestep condition silently wrong.
+inline float_t sound_speed(const SimParams& params) {
+    return std::sqrt(4.0f * params.pressure_multiplier / params.target_density);
+}
+
+// The flow speed this fluid can carry before it goes transonic and the pressure
+// field stops being able to communicate upstream. Reported at startup so the
+// scene is checked against the solver rather than assumed to fit it.
+inline float_t mach_number(float_t flow_speed, const SimParams& params) {
+    const float_t c = sound_speed(params);
+    return c > 0.0f ? flow_speed / c : 0.0f;
+}
 
 // Domain bounds
 constexpr float_t DOMAIN_MAX = 60.0f;

@@ -89,13 +89,23 @@ inline float_t dam_break_T(float_t t, float_t a, float_t gravity) {
     return a > 0.0f ? t * std::sqrt(2.0f * g / a) : 0.0f;
 }
 
-// Output name for a parameter sweep: each swept value gets its own file.
-// "50" -> dam_break_coh50.csv. If that name already holds a run, the next free
-// suffix is used (dam_break_coh50_2.csv) - measurement data is expensive to
+// Output name for a parameter sweep: each combination gets its own file, e.g.
+// dam_break_coh50_visc3.14_ten20.csv. If that name already holds a run, the
+// next free suffix is used (..._2.csv) - measurement data is expensive to
 // produce and must never be silently overwritten by a later run.
-inline std::string dam_break_filename(float_t cohesion) {
-    char base[64];
-    std::snprintf(base, sizeof(base), "dam_break_coh%g", static_cast<double>(cohesion));
+//
+// All three force parameters appear, not just the one being swept. Naming only
+// the swept parameter was enough while cohesion was the only thing that moved,
+// but it makes every other sweep collide: a viscosity sweep at fixed cohesion
+// writes the same name four times and lands in _2, _3, _4, where the filename
+// no longer says which run is which. Carrying all three costs a longer name and
+// buys a name that stays true whichever parameter the next study varies.
+inline std::string dam_break_filename(const SimParams& params) {
+    char base[128];
+    std::snprintf(base, sizeof(base), "dam_break_coh%g_visc%g_ten%g",
+                  static_cast<double>(params.cohesion_strength),
+                  static_cast<double>(params.viscosity),
+                  static_cast<double>(params.tension_strength));
 
     std::string path = std::string(base) + ".csv";
     for (int32_t i = 2; std::filesystem::exists(path) && std::filesystem::file_size(path) > 0;
@@ -120,7 +130,7 @@ class DamBreakLogger {
     void ensure_open() {
         if (!out_.is_open()) {
             out_.open(pending_, std::ios::trunc);
-            out_ << "sim_time,front_x,Z,T,cohesion,viscosity\n";
+            out_ << "sim_time,front_x,Z,T,cohesion,viscosity,tension,pressure\n";
         }
     }
 
@@ -139,11 +149,28 @@ public:
     // name. A filename records the value at spawn time, so changing a slider
     // without respawning silently mislabels the whole run; a column cannot lie,
     // and a mid-run change shows up as a step in the data instead of vanishing.
+    //
+    // Tension is here because the cohesion sweep needed it and did not have it.
+    // Cohesion and the Mueller color-field tension are separate additive terms
+    // in force.comp, so a run at cohesion 0 still has tension pulling at
+    // strength 20 - which makes "cohesion 0" a misleading label for what was
+    // really "cohesion off, the other surface-tension term still on". Logging
+    // it means a future reader can tell the two apart without having to know
+    // what the panel happened to be set to.
+    //
+    // Pressure is logged but deliberately kept out of the filename. Every knob
+    // someone might sweep cannot go in the name without it growing without
+    // bound, and it does not need to: the name only has to be unique, which the
+    // _2/_3 suffix already guarantees, while the columns carry what the run
+    // actually was. front_metrics.py reports whatever parameter columns it
+    // finds, so a k sweep is readable even when three of its files differ only
+    // by that suffix.
     void log(float_t t, float_t front_x, float_t origin_x, float_t a, const SimParams& params) {
         ensure_open();
         out_ << t << ',' << front_x << ',' << dam_break_Z(front_x, origin_x, a) << ','
              << dam_break_T(t, a, params.gravity) << ',' << params.cohesion_strength << ','
-             << params.viscosity << '\n';
+             << params.viscosity << ',' << params.tension_strength << ','
+             << params.pressure_multiplier << '\n';
         // Flush every sample: ~30 lines/s is nothing, and it means killing the
         // window (or a crash mid-run) still leaves the samples collected so far
         // instead of losing whatever sat in the stream buffer.
