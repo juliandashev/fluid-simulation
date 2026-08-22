@@ -1,6 +1,5 @@
-// Building start indices for each cell in the grid: an exclusive prefix sum
-// over cell_counts. Runs as a single invocation - ~950 cells is too small
-// to be worth a parallel scan.
+// Exclusive prefix sum over cell_counts. Single invocation; ~950 cells is too
+// small to be worth a parallel scan.
 #version 430
 
 layout(local_size_x = 1) in;

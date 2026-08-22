@@ -11,6 +11,8 @@
 # condition bound it in 5.5% of frames. So plot the two CANDIDATE timesteps the
 # conditions propose - the lower curve is the active constraint, and dt tracks
 # it whenever it dips below the ceiling.
+# Data paths below are relative to the working directory, so run this from
+# experiments/ (e.g. gnuplot ../media/plots/dt.plt).
 set datafile separator ','
 
 if (exists("out")) {

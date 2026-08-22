@@ -32,6 +32,16 @@ layout(std430, binding = 10) buffer MidVelocities {
     vec2 mid_velocities[];
 };
 
+// Reflect one particle back inside one face. `inward` is +1 when the fluid lies
+// on the increasing side of `bound`. Capped at u_eps; reflection is unbounded.
+void reflect_face(inout float coord, inout float vel, float bound, float inward) {
+    float penetration = (bound - coord) * inward;
+    if (penetration > 0.0) {
+        coord = bound + inward * min(penetration, u_eps);
+        vel *= u_bounce_damping;
+    }
+}
+
 // RK2 final advance: velocity kicks with the midpoint acceleration
 // (accelerations holds a2 by now), position moves with the midpoint velocity.
 void main() {
@@ -51,25 +61,12 @@ void main() {
         velocity = vec2(0.0);
     }
 
-    if (position.x < -u_domain_half_x + u_eps) {
-        position.x = -u_domain_half_x + u_eps;
-        velocity.x *= u_bounce_damping;
-    } else if (position.x > u_domain_half_x - u_eps) {
-        position.x = u_domain_half_x - u_eps;
-        velocity.x *= u_bounce_damping;
-    }
+    reflect_face(position.x, velocity.x, -u_domain_half_x,  1.0);
+    reflect_face(position.x, velocity.x,  u_domain_half_x, -1.0);
+    reflect_face(position.y, velocity.y,  u_domain_min,     1.0);
+    reflect_face(position.y, velocity.y,  u_domain_max,    -1.0);
 
-    if (position.y < u_domain_min) {
-        position.y = u_domain_min;
-        velocity.y *= u_bounce_damping;
-    } else if (position.y > u_domain_max) {
-        position.y = u_domain_max;
-        velocity.y *= u_bounce_damping;
-    }
-
-    // Hard cap, not physics: no single bad substep can launch a particle
-    // toward infinity, so a force spike can never snowball into NaN. The
-    // CFL-adapted dt catches up a frame later and restores accuracy.
+    // Hard cap, not physics: stops a force spike snowballing into NaN.
     float speed = length(velocity);
     if (isnan(speed) || isinf(speed)) {
         velocity = vec2(0.0);          // particle survives, loses momentum

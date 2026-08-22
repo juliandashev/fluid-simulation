@@ -2,46 +2,21 @@
 
 layout(local_size_x = 256) in;
 
-layout(std430, binding = 0) buffer Positions  { vec2 positions[]; };
-layout(std430, binding = 1) buffer Velocities { vec2 velocities[]; };
-layout(std430, binding = 2) buffer Densities  { vec2 densities[]; };
-layout(std430, binding = 3) buffer Accelerations { vec2 accelerations[]; };
-layout(std430, binding = 4) buffer CellCounts { uint cell_counts[]; };
-layout(std430, binding = 5) buffer CellStarts { uint cell_starts[]; };
-layout(std430, binding = 7) buffer SortedIndices { uint sorted_indices[]; };
+#include "common.glsl"
 
-uniform uint u_num_particles;
-uniform vec2 u_grid_origin;
-uniform float u_cell_size;
-uniform int u_grid_w;
-uniform int u_grid_h;
-uniform float u_kernel_radius;
-uniform float u_kernel_radius_sq;
-uniform float u_mass;
+layout(std430, binding = 1) buffer Velocities    { vec2 velocities[]; };
+layout(std430, binding = 3) buffer Accelerations { vec2 accelerations[]; };
+
 uniform float u_target_density;
 uniform float u_pressure_multiplier;
-uniform float u_near_pressure_multiplier;
 uniform float u_viscosity;
 uniform float u_tension_threshold;
 uniform float u_tension_strength;
 uniform float u_cohesion_strength;
 uniform float u_interaction_strength;
-uniform vec2 u_interaction_point;
+uniform vec2  u_interaction_point;
 uniform float u_interaction_radius;
-
-const float PI = 3.14159265358979;
-
-float spiky_kernel_derivative(float radius, float distance) {
-    if (distance >= radius) {
-        return 0.0f;
-    }
-
-    float h_sq = radius * radius;
-    float scale = PI * (h_sq * h_sq * radius);
-    float diff = radius - distance;
-
-    return -30.0f * diff * diff / scale;
-}
+uniform vec2 u_wall_slip;  // per tangential axis; 1 = free-slip, 0 = no-slip
 
 float viscosity_kernel_laplacian(float radius, float distance) {
     if (distance >= radius) {
@@ -55,25 +30,9 @@ float viscosity_kernel_laplacian(float radius, float distance) {
     return 40.0f * (radius - distance) / scale;
 }
 
-float near_spiky_kernel_derivative(float radius, float distance) {
-    if (distance >= radius) {
-        return 0.0f;
-    }
-
-    float h_sq = radius * radius;
-    float scale = PI * (h_sq * h_sq * h_sq);
-    float diff = radius - distance;
-
-    return -60.0f * diff * diff * diff / scale;
-}
-
 float pressure_from_density(float density) {
     float ratio = density / u_target_density;
-    return max(0.0, u_pressure_multiplier * (pow(ratio, 4.0) - 1.0));
-}
-
-float near_pressure_from_density(float near_density) {
-    return near_density * u_near_pressure_multiplier;
+    return max(0.0, u_pressure_multiplier * (pow(ratio, EOS_EXPONENT) - 1.0));
 }
 
 float poly6_gradient_coeff(float radius_sq, float distance_sq) {
@@ -100,10 +59,7 @@ float poly6_laplacian(float radius_sq, float distance_sq) {
     return -48.0 * diff * (radius_sq - 3.0 * distance_sq) / scale;
 }
 
-// Akinci-style pairwise cohesion weight: ~zero up close (near-pressure owns
-// that range), peaks at half the kernel radius, fades to zero at the edge.
-// Unlike the color-field tension, this attraction persists while separating
-// clumps still overlap kernels - that is what pinches necks into droplets.
+// Akinci pairwise cohesion; peaks at half the kernel radius.
 float cohesion_kernel(float radius, float distance) {
     float q = distance / radius;  // 0..1 inside the kernel
     return q < 1.0 ? q * q * (1.0 - q) * (1.0 - q) : 0.0;
@@ -133,7 +89,7 @@ vec2 interaction_force(vec2 position,
 
 // Everything main() combines into accelerations[i], gathered in one neighbor walk.
 struct Forces {
-    vec2 pressure;
+    vec2 pressure;        // already an acceleration - see accumulate_neighbor
     vec2 viscosity;
     vec2 tension;
     vec2 cohesion;
@@ -150,8 +106,7 @@ struct Accumulator {
 };
 
 void accumulate_neighbor(uint i, uint j, vec2 position_i, vec2 velocity_i,
-                         float pressure_i, float near_pressure_i,
-                         inout Accumulator accumulator) {
+                         float pressure_i, inout Accumulator accumulator) {
     vec2 offset = positions[j] - position_i;
     float distance_sq = dot(offset, offset);
 
@@ -166,17 +121,16 @@ void accumulate_neighbor(uint i, uint j, vec2 position_i, vec2 velocity_i,
         ? normalize(vec2(sin(float(i) * 12.9898), cos(float(i) * 78.233)))
         : offset / distance;
 
-    float slope = spiky_kernel_derivative(u_kernel_radius, distance);
-    float near_slope = near_spiky_kernel_derivative(u_kernel_radius, distance);
+    float slope = smoothing_kernel_derivative(u_kernel_radius, distance);
 
-    // shared pressure = average of mine and neighbor's, same as the CPU helper
-    float pressure_j = pressure_from_density(densities[j].x);
-    float near_pressure_j = near_pressure_from_density(densities[j].y);
-    float shared_pressure = 0.5 * (pressure_i + pressure_j);
-    float near_shared_pressure = 0.5 * (near_pressure_i + near_pressure_j);
+    float rho_i = densities[i].x;
+    float rho_j = densities[j].x;
+    float pressure_j = pressure_from_density(rho_j);
 
-    accumulator.pressure_force +=
-        norm_dir * u_mass * (shared_pressure * slope + near_shared_pressure * near_slope);
+    // Already an acceleration - the 1/rho^2 is carried here, so main() must NOT
+    // divide by rho_i again.
+    float pressure_term = pressure_i / (rho_i * rho_i) + pressure_j / (rho_j * rho_j);
+    accumulator.pressure_force += norm_dir * u_mass * pressure_term * slope;
 
     float influence = viscosity_kernel_laplacian(u_kernel_radius, distance);
     accumulator.viscosity_force += (velocities[j] - velocity_i) * influence * mj_over_rho_j;
@@ -191,13 +145,54 @@ void accumulate_neighbor(uint i, uint j, vec2 position_i, vec2 velocity_i,
     accumulator.color_laplacian += mj_over_rho_j * poly6_laplacian(u_kernel_radius_sq, distance_sq);
 }
 
+// Pressure and viscosity only; cohesion and the color field would make the wall
+// sticky. An image carries its source's density and pressure unchanged.
+void accumulate_wall_images(uint i, uint j, WallImages im, vec2 position_i,
+                            vec2 velocity_i, float pressure_i,
+                            inout Accumulator accumulator) {
+    float rho_i = densities[i].x;
+    float rho_j = densities[j].x;
+    float pressure_j = pressure_from_density(rho_j);
+    float pressure_term = pressure_i / (rho_i * rho_i) + pressure_j / (rho_j * rho_j);
+
+    for (int m = 0; m < im.count; ++m) {
+        vec2 mirrored = positions[j] * im.scale[m] + im.offset[m];
+        vec2 offset = mirrored - position_i;
+        float distance_sq = dot(offset, offset);
+
+        if (distance_sq >= u_kernel_radius_sq) {
+            continue;
+        }
+
+        float distance = sqrt(distance_sq);
+        if (distance < 1e-6) {
+            continue;  // only possible for a particle exactly on the face
+        }
+
+        vec2 norm_dir = offset / distance;
+        float slope = smoothing_kernel_derivative(u_kernel_radius, distance);
+
+        accumulator.pressure_force += norm_dir * u_mass * pressure_term * slope;
+
+        // mix leaves the normal component alone, so .x acts on floor images and
+        // .y on side-wall images - the only axis that is tangential for each.
+        vec2 mirrored_velocity =
+            mix(-velocities[j], velocities[j] * im.scale[m], u_wall_slip);
+
+        float influence = viscosity_kernel_laplacian(u_kernel_radius, distance);
+        accumulator.viscosity_force +=
+            (mirrored_velocity - velocity_i) * influence * (u_mass / rho_j);
+    }
+}
+
 // One 3x3 cell walk feeds all force accumulators: each neighbor's data is
 // fetched exactly once, which is what keeps this (the hot loop) affordable.
 Forces gather_forces(uint i, vec2 position_i, vec2 velocity_i) {
     float pressure_i = pressure_from_density(densities[i].x);
-    float near_pressure_i = near_pressure_from_density(densities[i].y);
 
     Accumulator accumulator = Accumulator(vec2(0.0), vec2(0.0), vec2(0.0), vec2(0.0), 0.0);
+
+    WallImages im = wall_images(position_i);
 
     ivec2 my_cell = ivec2(floor((position_i - u_grid_origin) / u_cell_size));
 
@@ -216,11 +211,16 @@ Forces gather_forces(uint i, vec2 position_i, vec2 velocity_i) {
 
             for (uint k = start; k < end; ++k) {
                 uint j = sorted_indices[k];
-                if (j == i) {
-                    continue;
+
+                // Self is excluded from the real interaction, not the images.
+                if (j != i) {
+                    accumulate_neighbor(i, j, position_i, velocity_i, pressure_i, accumulator);
                 }
 
-                accumulate_neighbor(i, j, position_i, velocity_i, pressure_i, near_pressure_i, accumulator);
+                if (im.count > 0) {
+                    accumulate_wall_images(i, j, im, position_i, velocity_i,
+                                           pressure_i, accumulator);
+                }
             }
         }
     }
@@ -258,6 +258,7 @@ void main() {
                                          u_interaction_radius,
                                          u_interaction_strength);
 
-    accelerations[i] =
-        (f.pressure + f.viscosity * u_viscosity + f.tension + f.cohesion + interaction) / densities[i].x;
+    // f.pressure is already an acceleration; everything else is still a force.
+    accelerations[i] = f.pressure +
+        (f.viscosity * u_viscosity + f.tension + f.cohesion + interaction) / densities[i].x;
 }

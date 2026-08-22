@@ -4,10 +4,7 @@
 
 struct GLFWwindow;
 
-// Thin RAII wrapper around Dear ImGui. Owns the ImGui context and the GLFW/GL3
-// backends, so setup happens in the constructor and teardown in the destructor
-// (while the GL context is still alive). Keeps every ImGui symbol confined to
-// debug_gui.cc -- the rest of the app never includes <imgui.h>.
+// RAII wrapper around Dear ImGui; confines every ImGui symbol to debug_gui.cc.
 class DebugGui {
 public:
     explicit DebugGui(GLFWwindow* window);

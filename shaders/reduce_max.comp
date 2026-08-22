@@ -17,13 +17,8 @@ layout(std430, binding = 11) buffer MaxKinematics {
 
 uniform uint u_num_particles;
 
-// Non-negative floats keep their ordering when their bit patterns are
-// compared as unsigned ints, so a uint atomicMax over floatBitsToUint
-// yields the exact float maximum. Both inputs are magnitudes, so >= 0.
-//
-// Speed feeds the velocity CFL condition; acceleration feeds the force
-// condition, which reacts a frame earlier - a compression spikes the
-// acceleration before it has had time to become velocity.
+// Non-negative floats keep their ordering as unsigned ints, so a uint atomicMax
+// over floatBitsToUint gives the exact float maximum. Both inputs are magnitudes.
 void main() {
     uint i = gl_GlobalInvocationID.x;
     if (i >= u_num_particles) return;

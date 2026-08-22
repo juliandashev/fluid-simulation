@@ -1,6 +1,8 @@
-# Matched-pair comparison: artificial viscosity 3.14 vs 0, all else identical.
+# Matched-pair comparison: viscosity 3.14 vs 0, all else identical.
 #   gnuplot viscosity_compare.plt                          - interactive
 #   gnuplot -e "out='viscosity_comparison.png'" viscosity_compare.plt
+# Data paths below are relative to the working directory, so run this from
+# experiments/ (e.g. gnuplot ../media/plots/viscosity_compare.plt).
 set datafile separator ','
 
 if (exists("out")) {
@@ -17,7 +19,7 @@ C0 = '#c0392b'   # viscosity 0
 C1 = '#1a5490'   # viscosity 3.14
 
 set multiplot layout 3,1 \
-  title "Artificial viscosity is the only bulk dissipation: removing it destabilises the solver immediately" font 'sans,15'
+  title "Viscosity is the only bulk dissipation: removing it destabilises the solver immediately" font 'sans,15'
 set lmargin 13
 set rmargin 30
 set xrange [0:42]

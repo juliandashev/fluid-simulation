@@ -33,4 +33,5 @@ private:
 
     static GLuint compile(GLenum type, const std::string& src);
     static std::string read_file(const std::string& path);
+    static std::string resolve_includes(const std::string& src);
 };

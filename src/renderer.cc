@@ -56,12 +56,14 @@ void Renderer::draw_circle(glm::vec2 center, float_t radius, glm::vec3 color) {
 }
 
 void Renderer::render(GLuint position_buffer, GLuint speed_buffer, size_t count) {
-    // Lazily build a VAO that reads positions and speeds straight from the
-    // sim's SSBOs: the buffers double as vertex attributes, so drawing needs
-    // no copy at all.
-    if (vao_ == 0) {
-        glGenVertexArrays(1, &vao_);
+    // VAO reads the sim's SSBOs directly as vertex attributes - no copy.
+    if (vao_ == 0 || position_buffer != bound_positions_ || speed_buffer != bound_speeds_) {
+        if (vao_ == 0) {
+            glGenVertexArrays(1, &vao_);
+        }
         glBindVertexArray(vao_);
+        bound_positions_ = position_buffer;
+        bound_speeds_ = speed_buffer;
 
         glBindBuffer(GL_ARRAY_BUFFER, position_buffer);
         glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(glm::vec2), nullptr);

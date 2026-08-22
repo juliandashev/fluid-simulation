@@ -29,6 +29,8 @@ private:
     Shader line_shader_;
 
     GLuint vao_ = 0;
+    GLuint bound_positions_ = 0;  // handles baked into vao_; a change rebuilds it
+    GLuint bound_speeds_ = 0;
 
     std::vector<glm::vec2> positions_;  // reused staging buffer, avoids per-frame allocation
 };

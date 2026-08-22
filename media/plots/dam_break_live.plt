@@ -1,11 +1,13 @@
 # Dam break surge front, dimensionless.
 #   gnuplot dam_break.plt                      - interactive
 #   gnuplot -e "out='dam_break.png'" dam_break.plt  - write a PNG
-# Plots the archived cohesion-50 run (dam_break_coh50_run1.csv).
+# Expects dam_break.csv (written by DamBreakLogger) in the working directory.
 #
 # Columns: 1=sim_time  2=front_x  3=Z  4=T
 #   Z = (x_front - x_0)/a     front position in column widths
 #   T = t*sqrt(2g/a)          time scaled by the column's free-fall time
+# Data paths below are relative to the working directory, so run this from
+# experiments/ (e.g. gnuplot ../media/plots/dam_break_live.plt).
 set datafile separator ','
 
 if (exists("out")) {
@@ -47,7 +49,7 @@ ritter(T) = 1.0 + sqrt(2.0*n)*T
 # against a curve for a different n - the aspect ratio changes the answer.
 # ---------------------------------------------------------------------------
 
-plot 'dam_break_coh50_run1.csv' skip 1 using 4:3 with lines lw 2 lc rgb '#1a5490' title 'this simulation', \
+plot 'dam_break.csv' skip 1 using 4:3 with lines lw 2 lc rgb '#1a5490' title 'this simulation', \
      ritter(x) with lines dt 2 lw 2 lc rgb '#c0392b' title 'Ritter (inviscid, frictionless bound)'
 #    'martin_moyce.csv' using 1:2 with points pt 7 ps 1.2 lc rgb '#000000' title 'Martin & Moyce (1952)'
 

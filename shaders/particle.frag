@@ -4,9 +4,7 @@ in float v_t;  // normalized speed in [0, 1]
 
 out vec4 frag_color;
 
-// Maps speed (0 = slow, 1 = fast) through a blue -> green -> yellow -> red ramp.
-// Four stops, three equal segments; mix() lerps between the two stops of the
-// segment t lands in, after remapping t to [0, 1] within that segment.
+// Speed (0..1) through a blue -> green -> yellow -> red ramp; three equal segments.
 vec3 speed_color(float t) {
     vec3 blue   = vec3(0.3, 0.6, 1.0);
     vec3 green  = vec3(0.2, 0.9, 0.3);

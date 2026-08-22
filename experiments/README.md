@@ -8,11 +8,12 @@ Each script writes a PNG when given an `out` variable, or opens an interactive
 window without one:
 
 ```
-gnuplot dam_break_sweep.plt                                   # interactive
-gnuplot -e "out='dam_break_sweep.png'" dam_break_sweep.plt    # write the figure
+gnuplot ../media/plots/dam_break_sweep.plt                    # interactive
+gnuplot -e "out='dam_break_sweep.png'" ../media/plots/dam_break_sweep.plt
 ```
 
-Run them from inside this directory - the data paths are relative.
+Scripts live in `media/plots/` and the finished figures in `media/`, but run
+them from inside this directory - the data paths are relative to the CSVs.
 
 `front_metrics.py` reduces any front trace to the numbers a sweep is judged on,
 so a claim below can be re-derived instead of remembered:
@@ -80,7 +81,7 @@ Then overlay them:
 
 ```
 gnuplot -e "files='dam_break_coh0_visc0_ten20.csv dam_break_coh0_visc3.14_ten20.csv'; \
-            labels='visc0 visc3.14'; name='Artificial viscosity'; \
+            labels='visc0 visc3.14'; name='Viscosity'; \
             out='viscosity_sweep.png'" sweep.plt
 ```
 
@@ -321,7 +322,10 @@ position for the planar case and Koshizuka & Oka (1996) give a second dataset.
 (two columns, `T,Z`). Use the curve for a matching aspect ratio - `n` changes the
 answer.
 
-## Artificial viscosity
+## Viscosity
+
+The Müller Laplacian term, not Monaghan artificial viscosity - this solver has
+no `Π_ij`, so there is no term that activates only on approach.
 
 Matched pair, identical in every parameter except the viscosity coefficient.
 
@@ -341,7 +345,7 @@ peak acceleration 9.9× and median peak speed 5.6×, pushes `dt` below its ceili
 in 93.5% of frames (versus 5.0%), and twice produces non-finite values that drive
 `dt` to its floor. With viscosity the run settles - peak speed falls to a third
 of its early value; without it, peak acceleration nearly triples across the run
-and is still climbing. Artificial viscosity is the only term in the force model
+and is still climbing. Viscosity is the only term in the force model
 that dissipates energy, and this is what its absence costs.
 
 ## dt trace

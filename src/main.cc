@@ -9,6 +9,7 @@
 #include "dam_break.hpp"
 #include "debug_gui.hpp"
 #include "defs.hpp"
+#include "eos.hpp"
 #include "history.hpp"
 #include "input.hpp"
 #include "renderer.hpp"
@@ -72,23 +73,14 @@ int main() {
         Logger logger("run.csv");
         DamBreakLogger dam_logger(dam_break_filename(params));
 
-        // One spawn path for startup and reset, so the benchmark's initial
-        // condition can never drift from the one R restores. The front log is
-        // reopened under the current parameters, which makes a parameter sweep a
-        // single session: set a value in the panel, press R, let it run, repeat.
+        // One spawn path for startup and reset, so R cannot drift from launch.
         auto spawn = [&] {
             if (DAM_BREAK_MODE) {
                 sim.spawn_dam_break(params.target_density, DAM_ASPECT);
                 dam_logger.restart(dam_break_filename(params));
 
-                // The benchmark carries its own prediction for how fast the
-                // front should run - Ritter's 2*sqrt(g*h0) - so comparing it
-                // against the EOS sound speed at spawn is the cheapest check
-                // that the scene fits inside the weakly-compressible
-                // assumption at all. Printed every reset because the panel can
-                // change the stiffness between one run and the next, and a
-                // sweep that quietly crosses Mach 1 partway through would
-                // otherwise look like a physics result.
+                // Ritter front speed against c: checks the scene is still
+                // weakly compressible. Reprinted per reset; the panel moves k.
                 const float_t u_ritter =
                     2.0f * std::sqrt(std::abs(params.gravity) * sim.column_height());
                 std::cout << "  c = " << sound_speed(params) << ", Ritter front speed = "
@@ -111,13 +103,8 @@ int main() {
         Input input(window);
         History history(MAX_HISTORY, NUM_PARTICLES);
 
-        // Benchmark mode starts paused. The logger opens on its first sample and
-        // names the file from whatever the panel holds at spawn, so a run that
-        // begins stepping the moment the window opens writes a file of
-        // default-parameter data before anyone has chosen the parameters - one
-        // stray per launch, indistinguishable by name from a real run at those
-        // settings. Pausing costs an interactive session one keypress and saves
-        // a measurement session from having to sort them out afterwards.
+        // Benchmark mode starts paused: the logger names its file from the
+        // panel at spawn, so stepping immediately writes a stray default run.
         bool paused = DAM_BREAK_MODE;
         if (paused) {
             std::cout << "Benchmark mode: paused. Set the panel, press R to spawn, "
@@ -138,6 +125,17 @@ int main() {
         int32_t frame_count = 0;
         uint64_t step_count = 0;
         bool acoustic_warned = false;
+
+        constexpr double DUMP_AT = 1e30;  // off; set a sim_time to snapshot particles.csv
+        bool dumped = false;
+
+        // Refreshed only when a step will consume it; already one frame stale by design.
+        glm::vec2 kin(0.0f);
+
+        // Refreshed on the measurement cadence; starts at rest.
+        DensityStats rho_stats{};
+        rho_stats.min = rho_stats.median = rho_stats.p90 = rho_stats.max =
+            params.target_density;
 
         while (!glfwWindowShouldClose(window)) {
             glfwPollEvents();
@@ -194,17 +192,15 @@ int main() {
             float_t dt = params.dt;
             float_t time_scale = params.time_scale;
 
-            if (dt < 1e-4f) {
-                dt = 1e-4f;  // a typo'd 0 would stall the loop
+            if (dt < DT_MIN) {
+                dt = DT_MIN;  // a typo'd 0 would stall the loop; also keeps clamp's lo <= hi
             }
 
-            // Adaptive time step, three CFL conditions: velocity (no particle
-            // crosses too much of a kernel radius per step), acceleration
-            // (catches a force spike the frame it appears, before it becomes
-            // velocity), and acoustic (a pressure wave must not outrun the
-            // step either). params.dt is the ceiling: calm fluid runs full
-            // speed.
-            glm::vec2 kin = sim.max_kinematics();  // x: max speed, y: max accel
+            // Three CFL conditions: velocity, acceleration, acoustic.
+            // params.dt is the ceiling.
+            if (!paused || step_fwd) {
+                kin = sim.max_kinematics();  // x: max speed, y: max accel
+            }
 
             float_t cfl_dt = dt;
             if (kin.x > 1e-6f) {  // at rest the divisions blow up
@@ -214,21 +210,17 @@ int main() {
                 cfl_dt = std::min(cfl_dt, CFL_LAMBDA_FORCE * std::sqrt(KERNEL_RADIUS / kin.y));
             }
 
-            // Unlike the other two this does not depend on the flow: it is set
-            // by the stiffness of the equation of state alone, so it is a
-            // ceiling that applies from the first step, before anything is
-            // moving. It has been slack at the stock pressure multiplier - the
-            // wave is slower than the flow there, which is its own problem -
-            // and so was never needed. It binds as soon as k is raised, which
-            // is exactly when it would otherwise be forgotten.
-            const float_t acoustic_dt = CFL_LAMBDA_SOUND * KERNEL_RADIUS / sound_speed(params);
+            // Set by EOS stiffness, not the flow. Takes the densest particle
+            // of the last sample, floored at rho_0.
+            const float_t rho_for_cfl = std::max(params.target_density, rho_stats.max);
+
+            const float_t acoustic_dt =
+                CFL_LAMBDA_SOUND * KERNEL_RADIUS / sound_speed_at(params, rho_for_cfl);
             cfl_dt = std::min(cfl_dt, acoustic_dt);
 
             dt = std::clamp(cfl_dt, DT_MIN, dt);
 
-            // DT_MIN wins that clamp, so a stiff enough EOS is under-resolved
-            // rather than slow, and silently: nothing else in the run would say
-            // so. Warn once, naming the value that would be needed.
+            // DT_MIN wins the clamp, so a stiff EOS is silently under-resolved.
             if (acoustic_dt < DT_MIN && !acoustic_warned) {
                 acoustic_warned = true;
                 std::cout << "WARNING: acoustic CFL wants dt <= " << acoustic_dt
@@ -248,11 +240,16 @@ int main() {
 
                     sim_time += dt;
                     if (step_count++ % 4 == 0) {
-                        logger.log(step_count, sim_time, dt, kin.x, kin.y);
+                        rho_stats = sim.density_stats();
+                        logger.log(step_count, sim_time, dt, kin.x, kin.y, rho_stats,
+                                   sim.accel_stats(params.gravity));
 
-                        // Front measurement stalls on a buffer readback, so it
-                        // rides the same cadence as the CSV rather than running
-                        // every step.
+                        if (!dumped && sim_time >= DUMP_AT) {
+                            dumped = true;
+                            sim.dump_particles("particles.csv", params.gravity);
+                        }
+
+                        // Stalls on a readback; rides the CSV cadence.
                         if (DAM_BREAK_MODE) {
                             const float_t origin = sim.column_origin_x();
                             dam_logger.log(sim_time,

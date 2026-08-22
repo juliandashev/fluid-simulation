@@ -1,10 +1,12 @@
 #pragma once
 
 #include <glm/vec2.hpp>
+#include <string>
 #include <vector>
 
 #include "shader.hpp"
 #include "defs.hpp"
+#include "stats.hpp"
 
 // Owns the GPU-resident particle state (position/velocity SSBOs) and the
 // compute shader that advances it. Requires a current GL context
@@ -31,13 +33,22 @@ public:
 
     // Host copy of the current positions. Stalls the pipeline, so call it at
     // measurement cadence (every Nth step), never per frame.
-    std::vector<glm::vec2> read_positions() const;
+    [[nodiscard]] std::vector<glm::vec2> read_positions() const;
 
-    // Max particle speed (x) and acceleration magnitude (y) of the last
-    // stepped frame (GPU reduction + 8-byte readback). Feeds the two CFL
-    // conditions that adapt dt.
-    glm::vec2 max_kinematics();
-    void debug_density_stats();
+    // Readback, no recompute; measurement cadence only. Holds the RK2 midpoint
+    // stage, so it is half a step stale relative to the logged positions.
+    [[nodiscard]] DensityStats density_stats() const;
+
+    // Takes gravity because the buffer excludes it and these are statistics of
+    // the residual |a + g| - see the definition.
+    [[nodiscard]] AccelStats accel_stats(float_t gravity) const;
+
+    // One row per particle; thresholds are left to analysis.
+    void dump_particles(const std::string& path, float_t gravity) const;
+
+    // Max speed (x) and acceleration magnitude (y) of the last stepped frame.
+    [[nodiscard]] glm::vec2 max_kinematics();
+    void debug_density_stats(float_t rest_density = TARGET_DENSITY);
 
     void set_interaction(glm::vec2 point, float_t strength) {
         interaction_point_ = point;

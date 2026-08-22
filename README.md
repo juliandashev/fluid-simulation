@@ -29,12 +29,22 @@ from the storage buffers - particle data never returns to the CPU.
 **Physics.** Pressure follows the **Tait equation of state** (the form of
 Becker & Teschner [3], with exponent 4 rather than their 7) clamped to
 non-negative, so compression is punished
-super-linearly while free surfaces feel no spurious attraction. A
-Clavet-style **near-pressure** term [2] adds short-range repulsion, and an
+super-linearly while free surfaces feel no spurious attraction. An
 Akinci-style **pairwise cohesion** force [4] holds detached blobs together
 and pinches separating fluid into droplets. Müller color-field surface
 tension [1] rounds free surfaces and holds grabbed fluid in a blob. Gravity
 is on - the fluid falls, pools, splashes, and settles.
+
+**Boundaries.** A wall truncates the kernel support: a particle within `h` of
+one sums a half-empty disc, reads about `ρ₀/2`, and the clamped EOS gives it
+zero pressure, so the wall acts as a low-pressure attractor that pulls fluid
+into it. Both the density and force passes repair this with **mirror images** -
+each neighbour reflected across any wall plane within `h`, corners taking a
+third diagonal image. The image's tangential velocity is what sets the slip
+condition, and it is set per face: the floor is no-slip and supplies the bulk
+dissipation, the side walls are free-slip so fluid pushed against them still
+falls freely. `reflect_face` in `step.comp` survives only as a penetration
+catcher, not as the boundary condition.
 
 **Integration and stability.** A **midpoint (RK2)** integrator evaluates the
 full pipeline twice per step. The timestep is **adaptive**: a GPU reduction
@@ -74,8 +84,8 @@ Runs reproduce to three significant figures despite frame timing varying the
 
 **Interaction & tooling.** Drag with the mouse to push or pull the fluid,
 pause and step/rewind through a GPU-resident history buffer, and tune the
-physics live - gravity, pressure, rest density, near-pressure, viscosity,
-tension, cohesion, timestep, and time scale - through a Dear ImGui panel.
+physics live - gravity, pressure, rest density, viscosity, tension,
+cohesion, timestep, and time scale - through a Dear ImGui panel.
 
 ### Working on now
 
@@ -84,10 +94,12 @@ with a known shape to compare against, which turns "it looks like water" into a
 measurable distance from published data. Four parameter studies are done -
 cohesion, surface tension, stiffness, viscosity - and chasing a residual through
 the first three turned it into two solver findings, one of which invalidated a
-headline from the first:
+headline from the first. Every front number below was measured with free-slip
+walls, before the floor became no-slip; the surge runs along that floor, so the
+sweeps need re-running before they are quoted as final:
 
 <p align="center">
-  <img src="experiments/dam_break_sweep_k4000.png"
+  <img src="media/dam_break_sweep_k4000.png"
        alt="Surge front vs cohesion at the converged stiffness" width="640">
 </p>
 
@@ -123,8 +135,10 @@ headline from the first:
   is `Z − Z₀ ∝ T^1.45` at every `k`. That is a front accelerating from rest,
   which crosses any threshold after a finite time. Cohesion 50 is the one run
   that genuinely holds (`p = 1.66`), so that result stands.
-- **Artificial viscosity.** It is the only term in the force model that
-  dissipates energy. Removing it raises median peak acceleration 9.9×, holds
+- **Viscosity.** The Müller Laplacian term [1] - not Monaghan artificial
+  viscosity, which this solver does not implement. It is the only term in the
+  force model that dissipates energy. Removing it raises median peak
+  acceleration 9.9×, holds
   `dt` below its ceiling in 93.5% of frames instead of 5%, and produces
   non-finite values the NaN firewall has to catch. The solver does not explode -
   it quietly runs at a third of the timestep and diverges.
@@ -272,8 +286,8 @@ shaders/
   count.comp       - counting sort 1/3: histogram of particles per cell
   scan.comp        - counting sort 2/3: prefix sum over cell counts
   scatter.comp     - counting sort 3/3: write sorted particle indices
-  density.comp     - density + near-density gather over the 3×3 neighbourhood
-  force.comp       - pressure, near-pressure, viscosity, cohesion, tension
+  density.comp     - density gather over the 3×3 neighbourhood + wall images
+  force.comp       - pressure, viscosity, cohesion, tension, wall images
   midpoint.comp    - RK2 stage 1: build the half-step state
   step.comp        - RK2 stage 2: final advance, boundaries, velocity cap
   reduce_max.comp  - max speed/acceleration reduction for the adaptive dt
@@ -291,17 +305,16 @@ Each acceleration evaluation dispatches, in order:
 
 1. **Grid rebuild** - counting sort over grid cells (histogram, prefix sum,
    scatter), giving each cell a contiguous slice of particle indices.
-2. **Density** - poly6 kernel for regular density, a sharper kernel for
-   near-density, gathered in one 3×3 cell walk.
-3. **Forces** - one fused neighbour loop accumulates pressure and
-   near-pressure (spiky-gradient kernels), viscosity (Laplacian kernel), and
-   pairwise cohesion. Pressure comes from the Tait equation of state
-   `p = k((ρ/ρ₀)⁴ − 1)`, clamped to ≥ 0; near-pressure `k_near · ρ_near` is
-   purely repulsive.
+2. **Density** - Wendland C2 kernel gathered in one 3×3 cell walk, plus the
+   mirror images of every neighbour when the particle is within `h` of a wall.
+3. **Forces** - one fused neighbour loop accumulates pressure (spiky
+   gradient), Müller Laplacian viscosity, pairwise cohesion, and the same
+   wall images as the density pass. Pressure comes from the Tait equation of
+   state `p = k((ρ/ρ₀)⁴ − 1)`, clamped to ≥ 0.
 
 The RK2 integrator runs this pipeline twice per step - once at the current
 state, once at the half-step - then advances position from the midpoint
-velocity and velocity from the midpoint acceleration, with reflective box
+velocity and velocity from the midpoint acceleration, with mirror-image wall
 boundaries and a hard speed cap.
 
 Between frames, a GPU reduction reads back the maximum speed and acceleration
@@ -313,6 +326,30 @@ less than `DT_MIN`, since nothing else in the run would say so. The
 frame loop feeds physics steps from a fixed-timestep accumulator, so the
 simulation stays deterministic through frame-rate spikes.
 
+Walls are handled by mirroring rather than by spawned boundary particles [6].
+Both fill the same hole - the kernel support a wall truncates - but a mirror
+image is an affine transform of a neighbour already fetched into a register,
+whereas a boundary particle is a separate memory read, and bandwidth is the
+scarce resource here. Filling the truncated region properly needs a band of
+thickness `h`, roughly four rows at the stock resolution, which for this tank
+is ~2300 particles against 4840 of fluid; they would also be sorted and walked
+every frame across the whole perimeter, while mirrors cost nothing where no
+fluid touches a wall. A reflected image additionally inherits the fluid's own
+density and disorder, so counter-pressure rises automatically under compression
+and no lattice structure is imprinted on the fluid. The trade is generality:
+mirroring only expresses planar, axis-aligned walls. Anything curved, angled, or
+moving requires boundary particles, and that is the point at which to switch.
+
+The image's tangential velocity is the slip condition, blended per face as
+`mix(-v, v*scale, s)`. The normal component is identical at both endpoints, so
+`s.x` reaches only floor and ceiling images and `s.y` only side walls, one
+`vec2` uniform and no branching. Viscous drag runs as `2(1 − s)`: `s = 0.5`
+is already a stationary wall, not half a wall, and useful slip lives close to
+1. The floor runs no-slip because SPH's boundary layer is set by `h` rather
+than by physical viscosity, so the drag band is ~4 particles thick either way;
+the side walls run free-slip because partial values dragged fluid down them
+visibly.
+
 ## References
 
 - [1] M. Müller, D. Charypar, M. Gross - *Particle-Based Fluid Simulation
@@ -323,7 +360,8 @@ simulation stays deterministic through frame-rate spikes.
 - [2] S. Clavet, P. Beaudoin, P. Poulin - *Particle-based Viscoelastic Fluid
   Simulation*, SCA 2005.
   [PDF](http://www.ligum.umontreal.ca/Clavet-2005-PVFS/pvfs.pdf) -
-  the near-density / near-pressure double-density relaxation.
+  the near-density / near-pressure double-density relaxation. Implemented
+  earlier, removed once the Tait EOS and cohesion covered the same ground.
 - [3] M. Becker, M. Teschner - *Weakly Compressible SPH for Free Surface
   Flows*, SCA 2007.
   [PDF](https://cg.informatik.uni-freiburg.de/publications/2007_SCA_SPH.pdf) -

@@ -10,6 +10,7 @@ rather than remembered.
     python3 front_metrics.py                     # every dam_break*.csv here
     python3 front_metrics.py dam_break_coh0.csv  # just these
     python3 front_metrics.py --slopes            # add the local slope profile
+    python3 front_metrics.py --fit-band=0.05:1.0 # widen the early-rise fit band
 
 Definitions, and why each one is what it is:
 
@@ -30,6 +31,21 @@ Definitions, and why each one is what it is:
   slope     dZ/dT from least squares over a centred window, reported as a
             percentage of the Ritter slope sqrt(2n). Reported as a profile
             rather than a single number on purpose: see below.
+
+  exponent  Least-squares fit of Z - Z0 = C*T^p over a band in *displacement*,
+            not in time: the band runs from ONSET_DELTA (where onset is already
+            declared) to FIT_BAND_HI column widths. Banding on displacement is
+            what makes the number comparable across a sweep - a fixed T window
+            catches cohesion 0 mid-collapse and cohesion 50 still standing
+            still, and then reports the difference as an exponent. p ~ 1.5 is a
+            front accelerating from rest; p much above that is a column that
+            held and then let go. R^2 is printed with it because that second
+            case is not a power law at all, and a lone exponent hides it.
+
+  Re, Bo    Reynolds and Bond numbers built from the logged force parameters,
+            each also given as a multiple of the real experiment's. This is the
+            only line that says whether a run is anywhere near the fluid it is
+            meant to represent; the sim-unit values cannot.
 
   wall      Z saturates when the front reaches the far wall. Everything logged
             after that is the pile-up, not the collapse, and must be excluded
@@ -56,10 +72,24 @@ HERE = Path(__file__).resolve().parent
 ASPECT = 2.41
 RITTER_SLOPE = math.sqrt(2.0 * ASPECT)
 
+# Scene constants needed to nondimensionalise. Not logged per sample - they are
+# compile-time in defs.hpp - so they live here and must be kept in step with it.
+RHO_0 = 0.9  # TARGET_DENSITY
+GRAVITY = 9.81
+COLUMN_A = 48.49  # a, the realised column width (create_column clamps rows to fit)
+
+# What the real planar dam break runs at: water, a = 2.25 in = 0.0572 m, so
+# U = sqrt(g*a) = 0.749 m/s, nu = 1e-6 m^2/s, sigma = 0.0728 N/m. Quoted so a
+# run here can be read against the experiment it is trying to reproduce rather
+# than against nothing.
+RE_EXPERIMENT = 4.3e4
+BO_EXPERIMENT = 4.4e2
+
 ONSET_DELTA = 0.05  # column widths the front must clear to count as "moved"
 WALL_TOL = 0.01  # column widths (~half a particle spacing) of slack at the wall
 CROSSINGS = (1.5, 2.0, 3.0)
 SLOPE_HALF_WINDOW = 0.15  # in T, each side of the centre point
+FIT_BAND_HI = 0.5  # column widths; upper edge of the early-rise fit band
 
 
 def read_run(path: Path) -> dict:
@@ -156,11 +186,77 @@ def local_slope(T: list[float], Z: list[float], centre: float) -> float | None:
     return (m * stz - st * sz) / denom if denom else None
 
 
+def dimensionless(params: dict) -> dict | None:
+    """Reynolds and Bond numbers for a run, from its logged force parameters.
+
+    Both use the column width a as the length scale and U = sqrt(g*a) as the
+    velocity scale - the free-fall speed over one column width, which is the
+    scale the T nondimensionalisation is already built on. Any consistent choice
+    works as long as the experiment is reduced the same way; this one is stated
+    rather than assumed because Re moves with the square of a bad U.
+
+    Re = U*a/nu with nu = mu/rho_0, and `viscosity` is Mueller dynamic viscosity
+    (force.comp:182 and :262 apply it as mu, so no alpha conversion is needed).
+    Bo = rho_0*g*a^2/sigma with sigma = `tension`, which the Mueller color-field
+    term uses directly. Zero viscosity or tension gives an infinite ratio, which
+    is the honest answer, not an error.
+    """
+    if "viscosity" not in params and "tension" not in params:
+        return None
+
+    u = math.sqrt(GRAVITY * COLUMN_A)
+    out = {}
+
+    if "viscosity" in params:
+        mu = params["viscosity"]
+        nu = mu / RHO_0
+        out["Re"] = math.inf if nu <= 0.0 else u * COLUMN_A / nu
+
+    if "tension" in params:
+        sigma = params["tension"]
+        out["Bo"] = math.inf if sigma <= 0.0 else RHO_0 * GRAVITY * COLUMN_A**2 / sigma
+
+    return out or None
+
+
+def power_fit(T: list[float], Z: list[float],
+              lo: float = ONSET_DELTA, hi: float = FIT_BAND_HI) -> dict | None:
+    """Fit Z - Z0 = C*T^p over the displacement band [lo, hi], by log-log least squares.
+
+    Returns the exponent, its R^2, and the T range the band actually spanned,
+    so a reader can see which part of the run produced the number. The band is
+    in column widths cleared, so every run is fitted over the same stage of its
+    own collapse rather than the same clock window.
+    """
+    z0 = Z[0]
+    pts = [(math.log(t), math.log(z - z0))
+           for t, z in zip(T, Z) if t > 0.0 and lo <= z - z0 <= hi]
+    if len(pts) < 4:
+        return None
+
+    m = len(pts)
+    sx = sum(x for x, _ in pts)
+    sy = sum(y for _, y in pts)
+    mx, my = sx / m, sy / m
+    sxy = sum((x - mx) * (y - my) for x, y in pts)
+    sxx = sum((x - mx) ** 2 for x, _ in pts)
+    if not sxx:
+        return None
+    slope = sxy / sxx
+
+    syy = sum((y - my) ** 2 for _, y in pts)
+    r2 = (sxy * sxy) / (sxx * syy) if syy else 1.0
+
+    return {"p": slope, "r2": r2, "n": m,
+            "t_lo": math.exp(pts[0][0]), "t_hi": math.exp(pts[-1][0])}
+
+
 def fmt(value: float | None, spec: str = "6.3f") -> str:
     return format(value, spec) if value is not None else "     -"
 
 
-def report(run: dict, show_slopes: bool) -> None:
+def report(run: dict, show_slopes: bool,
+           band: tuple[float, float] = (ONSET_DELTA, FIT_BAND_HI)) -> None:
     T, Z = usable(run)
     name = run["path"].name
 
@@ -168,6 +264,20 @@ def report(run: dict, show_slopes: bool) -> None:
     if run["params"]:
         joined = ", ".join(f"{k}={v}" for k, v in run["params"].items())
         print(f"    logged parameters: {joined}")
+
+        # Printed next to the raw values because the raw values are in sim
+        # units and mean nothing on their own: viscosity 3.14 is only large or
+        # small relative to h, rho_0 and the flow speed.
+        nd = dimensionless(run["params"])
+        if nd:
+            bits = []
+            if "Re" in nd:
+                bits.append(f"Re = {nd['Re']:.3g} ({nd['Re'] / RE_EXPERIMENT:.2g}x experiment)"
+                            if math.isfinite(nd["Re"]) else "Re = inf (inviscid)")
+            if "Bo" in nd:
+                bits.append(f"Bo = {nd['Bo']:.3g} ({nd['Bo'] / BO_EXPERIMENT:.2g}x experiment)"
+                            if math.isfinite(nd["Bo"]) else "Bo = inf (no tension)")
+            print("    dimensionless:     " + ",  ".join(bits))
     else:
         print("    logged parameters: none (pre-dates the parameter columns)")
 
@@ -188,6 +298,16 @@ def report(run: dict, show_slopes: bool) -> None:
 
     parts = [f"Z={lvl}: T={fmt(crossing(T, Z, lvl), '.3f')}" for lvl in CROSSINGS]
     print("    crossings   " + "   ".join(parts))
+
+    fit = power_fit(T, Z, *band)
+    if fit is None:
+        print(f"    exponent    - (fewer than 4 samples in Z-Z0 = "
+              f"[{band[0]}, {band[1]}])")
+    else:
+        flag = "" if fit["r2"] >= 0.99 else "   <- poor fit, not a power law"
+        print(f"    exponent    Z-Z0 ~ T^{fit['p']:.2f}   R^2 = {fit['r2']:.4f}"
+              f"   ({fit['n']} pts, T = {fit['t_lo']:.2f}-{fit['t_hi']:.2f},"
+              f" band {band[0]}-{band[1]}){flag}")
 
     # The front's speed is quoted against Ritter's, which is constant. Whether
     # that comparison means anything depends on the measured slope settling
@@ -215,6 +335,21 @@ def report(run: dict, show_slopes: bool) -> None:
 
 def main(argv: list[str]) -> int:
     show_slopes = "--slopes" in argv
+
+    # The exponent is the one number here that moves with its window, which is
+    # exactly why it is worth being able to move it: a claim quoted from this
+    # script should name the band it was fitted over.
+    band = (ONSET_DELTA, FIT_BAND_HI)
+    for arg in argv:
+        if arg.startswith("--fit-band="):
+            try:
+                lo, hi = (float(v) for v in arg.split("=", 1)[1].split(":"))
+            except ValueError:
+                sys.exit("--fit-band wants LO:HI in column widths, e.g. --fit-band=0.05:0.5")
+            if not 0.0 < lo < hi:
+                sys.exit("--fit-band wants 0 < LO < HI")
+            band = (lo, hi)
+
     names = [a for a in argv if not a.startswith("--")]
     paths = [Path(n) for n in names] if names else sorted(HERE.glob("dam_break*.csv"))
 
@@ -226,7 +361,7 @@ def main(argv: list[str]) -> int:
 
     print(f"Realised aspect n = {ASPECT}, Ritter slope sqrt(2n) = {RITTER_SLOPE:.4f}")
     for path in paths:
-        report(read_run(path), show_slopes)
+        report(read_run(path), show_slopes, band)
     print()
     return 0
 

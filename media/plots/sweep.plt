@@ -1,7 +1,7 @@
 # Generic parameter sweep: surge front vs any one swept parameter.
 #
 #   gnuplot -e "files='dam_break_coh0_visc0_ten20.csv dam_break_coh0_visc3.14_ten20.csv'; \
-#               labels='visc0 visc3.14'; name='Artificial viscosity'" sweep.plt
+#               labels='visc0 visc3.14'; name='Viscosity'" sweep.plt
 #   ... add "; out='viscosity_sweep.png'" to write a PNG instead of a window.
 #
 # dam_break_sweep.plt stays as it is - it reproduces the archived cohesion
@@ -15,6 +15,8 @@
 # defaults to the filenames, which are full of underscores, and underscores read
 # as subscripts in enhanced mode - hence `set key noenhanced`, which applies
 # whichever terminal the interactive branch happens to pick.
+# Data paths below are relative to the working directory, so run this from
+# experiments/ (e.g. gnuplot ../media/plots/sweep.plt).
 set datafile separator ','
 set key noenhanced
 

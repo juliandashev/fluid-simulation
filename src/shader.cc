@@ -1,5 +1,7 @@
 #include "shader.hpp"
 
+#include "eos.hpp"
+
 #include <cstdlib>
 #include <fstream>
 #include <glm/gtc/type_ptr.hpp>
@@ -37,8 +39,51 @@ GLuint Shader::compile(GLenum type, const std::string& src) {
     return shader;
 }
 
+// #define rather than a uniform: a literal exponent strength-reduces to
+// multiplies, a uniform one becomes exp2(u*log2(x)).
+static std::string shader_defines() {
+    std::ostringstream ss;
+    ss << "#define EOS_EXPONENT " << EOS_EXPONENT << ".0\n";
+    return ss.str();
+}
+
+// GLSL has no #include, so one is provided here. #line after each substitution
+// keeps compiler errors addressable.
+std::string Shader::resolve_includes(const std::string& src) {
+    std::istringstream in(src);
+    std::ostringstream out;
+    std::string line;
+
+    for (uint32_t number = 1; std::getline(in, line); ++number) {
+        const std::size_t open = line.find("#include \"");
+        if (open == std::string::npos) {
+            out << line << '\n';
+            continue;
+        }
+
+        const std::size_t first = open + 10;
+        const std::size_t last = line.find('"', first);
+        if (last == std::string::npos) {
+            std::cerr << "Malformed #include: " << line << "\n";
+            std::exit(EXIT_FAILURE);
+        }
+
+        out << read_file(std::string(SHADER_DIR) + "/" + line.substr(first, last - first))
+            << "\n#line " << (number + 1) << '\n';
+    }
+
+    return out.str();
+}
+
 Shader::Shader(const std::string& compute_path) {
-    GLuint comp = compile(GL_COMPUTE_SHADER, read_file(compute_path));
+    std::string src = read_file(compute_path);
+
+    // After #version, which must stay the literal first line the driver sees.
+    const std::size_t version_end = src.find('\n', src.find("#version"));
+    src = src.substr(0, version_end + 1) + shader_defines() + "#line 2\n" +
+          src.substr(version_end + 1);
+
+    GLuint comp = compile(GL_COMPUTE_SHADER, resolve_includes(src));
 
     id_ = glCreateProgram();
     glAttachShader(id_, comp);

@@ -101,3 +101,9 @@ dam_break*.csv
 # session happened to log, and imgui.ini is per-user window layout.
 experiments/imgui.ini
 experiments/run.csv
+
+# gnuplot scripts now live under media/plots/ and are tracked; the *.plt rule
+# above is for scratch scripts dropped in the working directory. Figures under
+# media/ are likewise tracked - the /dt.png and /dam_break*.png rules are
+# root-anchored and do not reach into it.
+!media/plots/**

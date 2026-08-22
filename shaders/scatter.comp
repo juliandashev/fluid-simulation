@@ -1,6 +1,5 @@
 // Places each particle's index into its cell's run of sorted_indices.
-// cell_cursors starts as a copy of cell_starts; atomicAdd hands each
-// particle a unique slot within its cell's run.
+// cell_cursors starts as a copy of cell_starts; atomicAdd hands out slots.
 #version 430
 
 layout(local_size_x = 256) in;

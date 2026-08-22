@@ -4,10 +4,7 @@
 
 #include "defs.hpp"
 
-// GPU-resident snapshot ring: a bounded stack of (position, velocity, speed)
-// copies taken with glCopyBufferSubData, so snapshots never leave the GPU.
-// Ring bookkeeping (head_/count_) lives on the CPU. Requires a current GL
-// context.
+// GPU-resident snapshot ring; bookkeeping on the CPU. Needs a current context.
 class History {
 public:
     History(uint32_t max_snapshots, uint32_t particle_count)

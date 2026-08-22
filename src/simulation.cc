@@ -1,7 +1,10 @@
 #include "simulation.hpp"
 
+#include <glm/geometric.hpp>
+
 #include <cmath>
 #include <cstring>
+#include <fstream>
 #include <iostream>
 #include <random>
 
@@ -67,8 +70,7 @@ Simulation::Simulation(uint32_t count)
 
     glGenBuffers(1, &sorted_indices_);
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, sorted_indices_);
-    glBufferData(GL_SHADER_STORAGE_BUFFER, NUM_PARTICLES * sizeof(GLuint), nullptr,
-                 GL_DYNAMIC_DRAW);
+    glBufferData(GL_SHADER_STORAGE_BUFFER, count_ * sizeof(GLuint), nullptr, GL_DYNAMIC_DRAW);
 
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
 
@@ -108,7 +110,6 @@ void Simulation::step(float_t delta_time, const SimParams& params) {
     force_.use();
     force_.set_float("u_target_density", params.target_density);
     force_.set_float("u_pressure_multiplier", params.pressure_multiplier);
-    force_.set_float("u_near_pressure_multiplier", params.near_pressure_multiplier);
     force_.set_float("u_viscosity", params.viscosity);
     force_.set_float("u_tension_threshold", params.tension_threshold);
     force_.set_vec2("u_interaction_point", interaction_point_);
@@ -140,12 +141,12 @@ void Simulation::step(float_t delta_time, const SimParams& params) {
 
     step_.use();
     glDispatchCompute(groups, 1, 1);
-    glMemoryBarrier(GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT);
+    // VERTEX_ATTRIB for the renderer, BUFFER_UPDATE for history copies and readbacks.
+    glMemoryBarrier(GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT | GL_BUFFER_UPDATE_BARRIER_BIT);
 }
 
-// Grid rebuild + density + force at the given state; accelerations land in
-// acceleration_ssbo_. All shaders read state via slots 0/1, so evaluating at
-// the midpoint is just a matter of which buffers get bound here.
+// Grid + density + force at the given state. All shaders read slots 0/1, so
+// the midpoint evaluation is just a matter of which buffers get bound.
 void Simulation::compute_accelerations(GLuint positions, GLuint velocities) {
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, positions);
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, velocities);
@@ -172,16 +173,16 @@ void Simulation::compute_accelerations(GLuint positions, GLuint velocities) {
 
     density_.use();
     glDispatchCompute(groups, 1, 1);
-    glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);  // densities land before force reads
+    // BUFFER_UPDATE too: density_stats() reads this back with glGetBufferSubData.
+    glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_BUFFER_UPDATE_BARRIER_BIT);
 
     force_.use();
     glDispatchCompute(groups, 1, 1);
-    glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);  // accels land before the next pass reads
+    // BUFFER_UPDATE too: accel_stats() reads this back with glGetBufferSubData.
+    glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_BUFFER_UPDATE_BARRIER_BIT);
 }
 
-// A NaN anywhere in the field wins the bitwise max; report "very fast" so
-// the CFL clamp drives dt to its floor instead of computing with NaN. The
-// check reads the exponent bits because -ffast-math breaks std::isfinite.
+// Reads exponent bits, not std::isfinite, which -ffast-math breaks.
 static float_t decode_max_bits(GLuint bits) {
     if ((bits & 0x7F800000u) == 0x7F800000u) {
         return 1e6f;
@@ -192,11 +193,8 @@ static float_t decode_max_bits(GLuint bits) {
     return value;
 }
 
-// Reduce speeds and acceleration magnitudes to their maxima and read them
-// back. Called once per rendered frame (not per substep): one 8-byte
-// transfer, and the stall it causes is mostly hidden behind vsync. The
-// values are one frame stale, which is fine - dt reacts a frame late, and
-// the CFL safety factors absorb that.
+// Once per rendered frame, not per substep. Values are one frame stale; the
+// CFL safety factors absorb that.
 glm::vec2 Simulation::max_kinematics() {
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, acceleration_ssbo_);
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 8, speed_ssbo_);
@@ -227,17 +225,15 @@ void Simulation::spawn_particles(bool is_random, float_t rest_density) {
         create_particles(rest_density);
     }
 
-    debug_density_stats();
+    debug_density_stats(rest_density);
 }
 
 void Simulation::create_particles(float_t rest_density) {
     std::vector<glm::vec2> positions;
     positions.reserve(count_);
 
-    // Centered square block: ceil(sqrt(N)) per side, spaced at the
-    // rest-density lattice pitch sqrt(m/rho_0) so the fluid spawns in
-    // mechanical equilibrium instead of venting a pressure transient. The
-    // buffers are fixed at count_, so stop there instead of filling the grid.
+    // Centered block at the rest-density pitch sqrt(m/rho_0), so it spawns in
+    // equilibrium. Buffers are fixed at count_, so stop there.
     const int32_t per_row =
         static_cast<int32_t>(std::ceil(std::sqrt(static_cast<float_t>(count_))));
     const float_t spacing = std::sqrt(MASS / rest_density);
@@ -254,23 +250,19 @@ void Simulation::create_particles(float_t rest_density) {
 
 void Simulation::spawn_dam_break(float_t rest_density, float_t aspect) {
     create_column(rest_density, aspect);
-    debug_density_stats();
+    debug_density_stats(rest_density);
 }
 
-// Dam break reservoir: a lattice column of aspect ratio (rows/cols) packed
-// against the left wall and standing on the floor. Same rest-density pitch as
-// the block spawn, so the column starts in mechanical equilibrium and the only
-// thing driving the flow is the removal of the (implicit) dam at t=0.
+// Dam break reservoir: a column of aspect ratio (rows/cols) against the left
+// wall, at the same rest-density pitch as the block spawn.
 void Simulation::create_column(float_t rest_density, float_t aspect) {
     std::vector<glm::vec2> positions;
     positions.reserve(count_);
 
     const float_t spacing = std::sqrt(MASS / rest_density);
 
-    // cols*rows = count_ with rows/cols = aspect. The column must also fit
-    // inside the domain, so clamp the height first and re-derive the width -
-    // an aspect that would overflow the ceiling silently becomes a shorter,
-    // wider column rather than particles spawning out of bounds.
+    // cols*rows = count_ with rows/cols = aspect. Height is clamped to the
+    // domain first and the width re-derived, so nothing spawns out of bounds.
     const int32_t max_rows =
         static_cast<int32_t>((DOMAIN_MAX - DOMAIN_MIN - 2.0f * EPS) / spacing);
 
@@ -365,16 +357,21 @@ void Simulation::set_static_uniforms() {
     reduce_max_.use();
     reduce_max_.set_uint("u_num_particles", count_);
 
-    density_.use();
-    density_.set_float("u_kernel_radius", KERNEL_RADIUS);
-    density_.set_float("u_kernel_radius_sq", KERNEL_RADIUS_SQ);
-    density_.set_float("u_mass", MASS);
+    // Domain bounds reach density/force too: both build the wall images.
+    for (Shader* s : {&density_, &force_}) {
+        s->use();
+        s->set_float("u_kernel_radius", KERNEL_RADIUS);
+        s->set_float("u_kernel_radius_sq", KERNEL_RADIUS_SQ);
+        s->set_float("u_mass", MASS);
+        s->set_float("u_domain_half_x", DOMAIN_HALF_X);
+        s->set_float("u_domain_min", DOMAIN_MIN);
+        s->set_float("u_domain_max", DOMAIN_MAX);
+        s->set_float("u_wall_offset", WALL_OFFSET);
+    }
 
     force_.use();
-    force_.set_float("u_kernel_radius", KERNEL_RADIUS);
-    force_.set_float("u_kernel_radius_sq", KERNEL_RADIUS_SQ);
-    force_.set_float("u_mass", MASS);
     force_.set_float("u_interaction_radius", INTERACTION_RADIUS);
+    force_.set_vec2("u_wall_slip", {WALL_SLIP_FLOOR, WALL_SLIP_SIDE});
 
     step_.use();
     step_.set_uint("u_num_particles", count_);
@@ -386,9 +383,119 @@ void Simulation::set_static_uniforms() {
     step_.set_float("u_max_speed", MAX_SPEED);
 }
 
+DensityStats Simulation::density_stats() const {
+    DensityStats stats;
+    if (count_ == 0) {
+        return stats;
+    }
+
+    std::vector<glm::vec2> densities(count_);
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, density_ssbo_);
+    glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, count_ * sizeof(glm::vec2), densities.data());
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+
+    std::vector<float_t> rho(count_);
+    for (uint32_t i = 0; i < count_; ++i) {
+        rho[i] = densities[i].x;
+    }
+
+    // Two passes: sigma is ~1% of the mean, so E[x^2] - E[x]^2 cancels badly.
+    float_t mean = 0.0f;
+    for (float_t r : rho) {
+        mean += r;
+    }
+    mean /= static_cast<float_t>(count_);
+
+    float_t variance = 0.0f;
+    for (float_t r : rho) {
+        variance += (r - mean) * (r - mean);
+    }
+    stats.sigma = std::sqrt(variance / static_cast<float_t>(count_));
+
+    // Quickselect; the p90 pass starts from the already-partitioned median.
+    const auto mid = rho.begin() + count_ / 2;
+    std::nth_element(rho.begin(), mid, rho.end());
+    stats.median = *mid;
+
+    const auto p90 = rho.begin() + (count_ * 9) / 10;
+    std::nth_element(mid, p90, rho.end());
+    stats.p90 = *p90;
+
+    const auto [lo, hi] = std::minmax_element(rho.begin(), rho.end());
+    stats.min = *lo;
+    stats.max = *hi;
+
+    return stats;
+}
+
+// Ranked on |a + g|, not |a|: force.comp excludes gravity, so this puts
+// equilibrium at 0 rather than 9.81.
+AccelStats Simulation::accel_stats(float_t gravity) const {
+    AccelStats stats;
+    if (count_ == 0) {
+        return stats;
+    }
+
+    std::vector<glm::vec2> accels(count_);
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, acceleration_ssbo_);
+    glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, count_ * sizeof(glm::vec2), accels.data());
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+
+    std::vector<float_t> mag(count_);
+    const glm::vec2 g(0.0f, gravity);
+    for (uint32_t i = 0; i < count_; ++i) {
+        mag[i] = glm::length(accels[i] + g);
+    }
+
+    const auto mid = mag.begin() + count_ / 2;
+    std::nth_element(mag.begin(), mid, mag.end());
+    stats.median = *mid;
+
+    const auto p90 = mag.begin() + (count_ * 9) / 10;
+    std::nth_element(mid, p90, mag.end());
+    stats.p90 = *p90;
+
+    const auto [lo, hi] = std::minmax_element(mag.begin(), mag.end());
+    stats.min = *lo;
+    stats.max = *hi;
+
+    return stats;
+}
+
+void Simulation::dump_particles(const std::string& path, float_t gravity) const {
+    if (count_ == 0) {
+        return;
+    }
+
+    std::vector<glm::vec2> pos(count_), acc(count_), den(count_);
+
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, position_ssbo_);
+    glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, count_ * sizeof(glm::vec2), pos.data());
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, acceleration_ssbo_);
+    glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, count_ * sizeof(glm::vec2), acc.data());
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, density_ssbo_);
+    glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, count_ * sizeof(glm::vec2), den.data());
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+
+    const glm::vec2 g(0.0f, gravity);
+
+    std::ofstream out(path);
+    // wall_dist is to the nearest of the four faces.
+    out << "x,y,rho,ax,ay,res,wall_dist\n";
+    for (uint32_t i = 0; i < count_; ++i) {
+        const float_t dx = std::min(DOMAIN_HALF_X - pos[i].x, pos[i].x + DOMAIN_HALF_X);
+        const float_t dy = std::min(DOMAIN_MAX - pos[i].y, pos[i].y - DOMAIN_MIN);
+        out << pos[i].x << ',' << pos[i].y << ',' << den[i].x << ','
+            << acc[i].x << ',' << acc[i].y << ','
+            << glm::length(acc[i] + g) << ',' << std::min(dx, dy) << '\n';
+    }
+
+    std::cout << "dumped " << count_ << " particles to " << path << std::endl;
+}
+
 // One-shot diagnostic: run the pipeline at the current state and report the
 // density distribution. Interior particles should sit at TARGET_DENSITY.
-void Simulation::debug_density_stats() {
+void Simulation::debug_density_stats(float_t rest_density) {
     // Slots 2-7 are normally bound at the top of step(); this may run before
     // any step, so the grid/density/force chain needs them bound here too.
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, density_ssbo_);
@@ -401,15 +508,10 @@ void Simulation::debug_density_stats() {
     compute_accelerations(position_ssbo_, velocity_ssbo_);
     glMemoryBarrier(GL_BUFFER_UPDATE_BARRIER_BIT);  // densities land before readback
 
-    std::vector<glm::vec2> densities(count_);
-    glBindBuffer(GL_SHADER_STORAGE_BUFFER, density_ssbo_);
-    glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, count_ * sizeof(glm::vec2), densities.data());
-    glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+    const DensityStats stats = density_stats();
+    const float_t spread = rest_density > 0.0f ? 100.0f * stats.sigma / rest_density : 0.0f;
 
-    std::vector<float_t> rho(count_);
-    for (uint32_t i = 0; i < count_; ++i) rho[i] = densities[i].x;
-    std::sort(rho.begin(), rho.end());
-
-    std::cout << "density  min=" << rho.front() << "  median=" << rho[count_ / 2]
-              << "  p90=" << rho[(count_ * 9) / 10] << "  max=" << rho.back() << std::endl;
+    std::cout << "density  min=" << stats.min << "  median=" << stats.median
+              << "  p90=" << stats.p90 << "  max=" << stats.max
+              << "  sigma/rho_0=" << spread << "% (target ~1%)" << std::endl;
 }

@@ -11,6 +11,8 @@
 # in the front trace, lowering cohesion should shorten the plateau. If the
 # plateau survives at cohesion 0, the cause is viscosity or the pressure
 # solver, not cohesion.
+# Data paths below are relative to the working directory, so run this from
+# experiments/ (e.g. gnuplot ../media/plots/dam_break_sweep.plt).
 set datafile separator ','
 
 if (exists("out")) {
