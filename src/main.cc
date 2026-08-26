@@ -10,11 +10,16 @@
 #include "debug_gui.hpp"
 #include "defs.hpp"
 #include "eos.hpp"
+#include "experiment.hpp"
 #include "history.hpp"
 #include "input.hpp"
 #include "renderer.hpp"
 #include "simulation.hpp"
 #include "logger.hpp"
+#include "obstacle.hpp"
+#include "profile.hpp"
+
+namespace fluid {
 
 // convert pixels (top-left, y-down) to world uints
 // inverting the vertex shader's transform
@@ -25,7 +30,21 @@ glm::vec2 screen_to_world(glm::vec2 px, int32_t w, int32_t h) {
     return glm::vec2(ndc_x * aspect, ndc_y) * DOMAIN_MAX;  // mirror the shader's x-correction
 }
 
-int main() {
+}  // namespace fluid
+
+int main(int argc, char** argv) {
+    using namespace fluid;
+
+    Experiment experiment = Experiment::Sandbox;
+    switch (parse_args(argc, argv, experiment)) {
+        case ArgsResult::Exit:  return EXIT_SUCCESS;
+        case ArgsResult::Error: return EXIT_FAILURE;
+        case ArgsResult::Ok:    break;
+    }
+
+    const ExperimentSpec& scene = spec_of(experiment);
+    std::cout << "Experiment: " << scene.name << " (" << scene.summary << ")\n";
+
     if (!glfwInit()) {
         std::cerr << "Failed to initialise GLFW\n";
         return EXIT_FAILURE;
@@ -65,19 +84,55 @@ int main() {
     // while the GL context still exists
     {
         SimParams params;
+        configure(experiment, params);
 
         Simulation sim(NUM_PARTICLES);
 
         bool testing = false;
 
-        Logger logger("run.csv");
-        DamBreakLogger dam_logger(dam_break_filename(params));
+        log::Logger logger("run.csv");
+        dam_break::Logger dam_logger(dam_break::filename(params));
+        profile::Logger profile_logger(profile::filename(scene.name, params),
+                                       profile::pipe_duct());
 
         // One spawn path for startup and reset, so R cannot drift from launch.
+        const std::vector<obstacle::Quad> obstacles = [&] {
+            switch (experiment) {
+            case Experiment::DamBreakObstacle: return obstacle::dam_break_block();
+            case Experiment::Pipe:             return obstacle::pipe();
+            default:                           return std::vector<obstacle::Quad>{};
+            }
+        }();
+
+        const std::vector<glm::vec2> solid_particles = obstacle::to_particles(obstacles);
+
         auto spawn = [&] {
-            if (DAM_BREAK_MODE) {
+            sim.spawn_solids(solid_particles);
+
+            switch (experiment) {
+            case Experiment::Pipe: {
+                const float_t h = obstacle::PIPE_HALF_HEIGHT;
+                const float_t x = 0.5f * PERIOD_X;
+
+                sim.set_periodic_x(PERIOD_X);
+                sim.spawn_at(obstacle::fill_region(glm::vec2(-x, -h), glm::vec2(x, h),
+                                                   solid_particles, sim.count()));
+                profile_logger.restart(profile::filename(scene.name, params));
+
+                std::cout << "  c = " << sound_speed(params) << "; Mach 0.1 is "
+                          << 0.1f * sound_speed(params)
+                          << ". Body force " << params.body_accel_x
+                          << " settles the throat near Mach "
+                          << 0.16f * params.body_accel_x << ".\n"
+                          << "  Faster flow needs a higher pressure multiplier too, or it "
+                             "goes transonic and the throat chokes.\n";
+                break;
+            }
+            case Experiment::DamBreak:
+            case Experiment::DamBreakObstacle: {
                 sim.spawn_dam_break(params.target_density, DAM_ASPECT);
-                dam_logger.restart(dam_break_filename(params));
+                dam_logger.restart(dam_break::filename(params));
+                profile_logger.restart(profile::filename(scene.name, params));
 
                 // Ritter front speed against c: checks the scene is still
                 // weakly compressible. Reprinted per reset; the panel moves k.
@@ -86,26 +141,30 @@ int main() {
                 std::cout << "  c = " << sound_speed(params) << ", Ritter front speed = "
                           << u_ritter << " -> Mach " << mach_number(u_ritter, params)
                           << " (weakly-compressible SPH wants <= 0.1)\n";
-            } else {
+                break;
+            }
+            case Experiment::Sandbox:
                 sim.spawn_particles(testing, params.target_density);
+                break;
             }
         };
 
         spawn();
 
-        Renderer renderer(NUM_PARTICLES);
+        gl::Renderer renderer(NUM_PARTICLES);
 
         // Live parameter panel. RAII: owns the ImGui context for this scope, so
         // it tears down while the GL context is still current (like Renderer).
-        DebugGui gui(window);
+        ui::DebugGui gui(window);
 
         // Controlling space
-        Input input(window);
-        History history(MAX_HISTORY, NUM_PARTICLES);
+        ui::Input input(window);
+        gl::ColorField color_field = gl::ColorField::Speed;
+        gl::History history(MAX_HISTORY, NUM_PARTICLES);
 
         // Benchmark mode starts paused: the logger names its file from the
         // panel at spawn, so stepping immediately writes a stray default run.
-        bool paused = DAM_BREAK_MODE;
+        bool paused = scene.starts_paused;
         if (paused) {
             std::cout << "Benchmark mode: paused. Set the panel, press R to spawn, "
                          "space to run.\n";
@@ -133,7 +192,7 @@ int main() {
         glm::vec2 kin(0.0f);
 
         // Refreshed on the measurement cadence; starts at rest.
-        DensityStats rho_stats{};
+        log::DensityStats rho_stats{};
         rho_stats.min = rho_stats.median = rho_stats.p90 = rho_stats.max =
             params.target_density;
 
@@ -151,6 +210,11 @@ int main() {
             bool step_fwd = input.is_right_arrow_key_pressed();
             bool step_back = input.is_left_arrow_key_pressed();
             bool reset = input.is_R_key_pressed();
+
+            if (input.is_P_key_pressed()) {
+                color_field = color_field == gl::ColorField::Speed ? gl::ColorField::Pressure
+                                                                   : gl::ColorField::Speed;
+            }
 
             now = glfwGetTime();
             frame_time = now - previous;
@@ -249,11 +313,16 @@ int main() {
                             sim.dump_particles("particles.csv", params.gravity);
                         }
 
+                        if (scene.logs_profile) {
+                            profile_logger.log(sim_time, sim.read_positions(),
+                                               sim.read_speeds(), sim.read_densities(), params);
+                        }
+
                         // Stalls on a readback; rides the CSV cadence.
-                        if (DAM_BREAK_MODE) {
+                        if (scene.logs_front) {
                             const float_t origin = sim.column_origin_x();
                             dam_logger.log(sim_time,
-                                           surge_front(sim.read_positions(), origin), origin,
+                                           dam_break::surge_front(sim.read_positions(), origin), origin,
                                            sim.column_width(), params);
                         }
                     }
@@ -278,7 +347,13 @@ int main() {
             glClearColor(0.02f, 0.04f, 0.10f, 1.0f);
             glClear(GL_COLOR_BUFFER_BIT);
 
-            renderer.render(sim.position_buffer(), sim.speed_buffer(), sim.count());
+            const GLuint field_buffer = color_field == gl::ColorField::Pressure
+                                            ? sim.density_buffer()
+                                            : sim.speed_buffer();
+
+            // Behind the fluid, so a particle that leaks in is still visible.
+            renderer.draw_quads(obstacles);
+            renderer.render(sim.position_buffer(), field_buffer, color_field, params, sim.count());
 
             if (interacting) {
                 renderer.draw_circle(world, INTERACTION_RADIUS, glm::vec3(1.0f, 0.2f, 0.2f));

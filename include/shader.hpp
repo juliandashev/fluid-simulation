@@ -8,6 +8,9 @@
 #include <glm/vec4.hpp>
 #include <string>
 
+namespace fluid {
+namespace gl {
+
 class Shader {
 public:
     explicit Shader(const std::string& compute_path);
@@ -35,3 +38,6 @@ private:
     static std::string read_file(const std::string& path);
     static std::string resolve_includes(const std::string& src);
 };
+
+}  // namespace gl
+}  // namespace fluid

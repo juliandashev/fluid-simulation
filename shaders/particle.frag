@@ -1,11 +1,11 @@
 #version 430 core
 
-in float v_t;  // normalized speed in [0, 1]
+in float v_t;  // normalized field value in [0, 1]
 
 out vec4 frag_color;
 
-// Speed (0..1) through a blue -> green -> yellow -> red ramp; three equal segments.
-vec3 speed_color(float t) {
+// Field value (0..1) through a blue -> green -> yellow -> red ramp; three equal segments.
+vec3 ramp_color(float t) {
     vec3 blue   = vec3(0.3, 0.6, 1.0);
     vec3 green  = vec3(0.2, 0.9, 0.3);
     vec3 yellow = vec3(1.0, 0.9, 0.2);
@@ -23,5 +23,5 @@ void main() {
     if (dot(coord, coord) > 0.25)
         discard;
 
-    frag_color = vec4(speed_color(v_t), 1.0);
+    frag_color = vec4(ramp_color(v_t), 1.0);
 }

@@ -17,6 +17,7 @@ uniform float u_interaction_strength;
 uniform vec2  u_interaction_point;
 uniform float u_interaction_radius;
 uniform vec2 u_wall_slip;  // per tangential axis; 1 = free-slip, 0 = no-slip
+uniform float u_solid_slip;  // same, for boundary particles
 
 float viscosity_kernel_laplacian(float radius, float distance) {
     if (distance >= radius) {
@@ -105,9 +106,9 @@ struct Accumulator {
     float color_laplacian; // curvature measure
 };
 
-void accumulate_neighbor(uint i, uint j, vec2 position_i, vec2 velocity_i,
+void accumulate_neighbor(uint i, uint j, float shift, vec2 position_i, vec2 velocity_i,
                          float pressure_i, inout Accumulator accumulator) {
-    vec2 offset = positions[j] - position_i;
+    vec2 offset = positions[j] + vec2(shift, 0.0) - position_i;
     float distance_sq = dot(offset, offset);
 
     if (distance_sq >= u_kernel_radius_sq) {
@@ -147,7 +148,7 @@ void accumulate_neighbor(uint i, uint j, vec2 position_i, vec2 velocity_i,
 
 // Pressure and viscosity only; cohesion and the color field would make the wall
 // sticky. An image carries its source's density and pressure unchanged.
-void accumulate_wall_images(uint i, uint j, WallImages im, vec2 position_i,
+void accumulate_wall_images(uint i, uint j, float shift, WallImages im, vec2 position_i,
                             vec2 velocity_i, float pressure_i,
                             inout Accumulator accumulator) {
     float rho_i = densities[i].x;
@@ -156,7 +157,7 @@ void accumulate_wall_images(uint i, uint j, WallImages im, vec2 position_i,
     float pressure_term = pressure_i / (rho_i * rho_i) + pressure_j / (rho_j * rho_j);
 
     for (int m = 0; m < im.count; ++m) {
-        vec2 mirrored = positions[j] * im.scale[m] + im.offset[m];
+        vec2 mirrored = (positions[j] + vec2(shift, 0.0)) * im.scale[m] + im.offset[m];
         vec2 offset = mirrored - position_i;
         float distance_sq = dot(offset, offset);
 
@@ -185,6 +186,60 @@ void accumulate_wall_images(uint i, uint j, WallImages im, vec2 position_i,
     }
 }
 
+// Pressure mirroring: a boundary particle takes the pressure and density of the
+// fluid particle looking at it, which is what holds a resting column up instead
+// of letting it sink in. Cohesion and the color field are excluded, as for walls.
+void accumulate_solids(uint i, vec2 position_i, vec2 velocity_i, float pressure_i,
+                       inout Accumulator accumulator) {
+    if (u_num_solids == 0u) {
+        return;
+    }
+
+    float rho_i = densities[i].x;
+    float pressure_term = 2.0 * pressure_i / (rho_i * rho_i);
+
+    // slip = 1 leaves zero relative velocity, so no drag; slip = 0 reverses it.
+    vec2 solid_velocity = mix(-velocity_i, velocity_i, u_solid_slip);
+
+    ivec2 my_cell = ivec2(floor((position_i - u_grid_origin) / u_cell_size));
+
+    for (int dy = -1; dy <= 1; ++dy) {
+        for (int dx = -1; dx <= 1; ++dx) {
+            ivec2 cell = my_cell + ivec2(dx, dy);
+            float shift;
+
+            if (!resolve_cell(cell, shift)) {
+                continue;
+            }
+
+            uint ci = uint(cell.y * u_grid_w + cell.x);
+
+            uint start = solid_cell_starts[ci];
+            uint end = start + solid_cell_counts[ci];
+
+            for (uint k = start; k < end; ++k) {
+                vec2 offset =
+                    solid_positions[solid_sorted_indices[k]] + vec2(shift, 0.0) - position_i;
+                float distance_sq = dot(offset, offset);
+
+                if (distance_sq >= u_kernel_radius_sq || distance_sq < 1e-12) {
+                    continue;
+                }
+
+                float distance = sqrt(distance_sq);
+                vec2 norm_dir = offset / distance;
+                float slope = smoothing_kernel_derivative(u_kernel_radius, distance);
+
+                accumulator.pressure_force += norm_dir * u_mass * pressure_term * slope;
+
+                float influence = viscosity_kernel_laplacian(u_kernel_radius, distance);
+                accumulator.viscosity_force +=
+                    (solid_velocity - velocity_i) * influence * (u_mass / rho_i);
+            }
+        }
+    }
+}
+
 // One 3x3 cell walk feeds all force accumulators: each neighbor's data is
 // fetched exactly once, which is what keeps this (the hot loop) affordable.
 Forces gather_forces(uint i, vec2 position_i, vec2 velocity_i) {
@@ -199,8 +254,9 @@ Forces gather_forces(uint i, vec2 position_i, vec2 velocity_i) {
     for (int dy = -1; dy <= 1; ++dy) {
         for (int dx = -1; dx <= 1; ++dx) {
             ivec2 cell = my_cell + ivec2(dx, dy);
+            float shift;
 
-            if (cell.x < 0 || cell.x >= u_grid_w || cell.y < 0 || cell.y >= u_grid_h) {
+            if (!resolve_cell(cell, shift)) {
                 continue;
             }
 
@@ -213,17 +269,20 @@ Forces gather_forces(uint i, vec2 position_i, vec2 velocity_i) {
                 uint j = sorted_indices[k];
 
                 // Self is excluded from the real interaction, not the images.
-                if (j != i) {
-                    accumulate_neighbor(i, j, position_i, velocity_i, pressure_i, accumulator);
+                if (j != i || shift != 0.0) {
+                    accumulate_neighbor(i, j, shift, position_i, velocity_i, pressure_i,
+                                        accumulator);
                 }
 
                 if (im.count > 0) {
-                    accumulate_wall_images(i, j, im, position_i, velocity_i,
+                    accumulate_wall_images(i, j, shift, im, position_i, velocity_i,
                                            pressure_i, accumulator);
                 }
             }
         }
     }
+
+    accumulate_solids(i, position_i, velocity_i, pressure_i, accumulator);
 
     Forces f;
     f.pressure = accumulator.pressure_force;

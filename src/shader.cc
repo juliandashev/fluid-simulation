@@ -8,6 +8,9 @@
 #include <iostream>
 #include <sstream>
 
+namespace fluid {
+namespace gl {
+
 const uint16_t LOG_SIZE = 512;
 
 std::string Shader::read_file(const std::string& path) {
@@ -41,11 +44,22 @@ GLuint Shader::compile(GLenum type, const std::string& src) {
 
 // #define rather than a uniform: a literal exponent strength-reduces to
 // multiplies, a uniform one becomes exp2(u*log2(x)).
-static std::string shader_defines() {
+namespace {
+
+std::string shader_defines() {
     std::ostringstream ss;
     ss << "#define EOS_EXPONENT " << EOS_EXPONENT << ".0\n";
     return ss.str();
 }
+
+// After #version, which must stay the literal first line the driver sees.
+std::string with_defines(const std::string& src) {
+    const std::size_t version_end = src.find('\n', src.find("#version"));
+    return src.substr(0, version_end + 1) + shader_defines() + "#line 2\n" +
+           src.substr(version_end + 1);
+}
+
+}  // namespace
 
 // GLSL has no #include, so one is provided here. #line after each substitution
 // keeps compiler errors addressable.
@@ -76,14 +90,7 @@ std::string Shader::resolve_includes(const std::string& src) {
 }
 
 Shader::Shader(const std::string& compute_path) {
-    std::string src = read_file(compute_path);
-
-    // After #version, which must stay the literal first line the driver sees.
-    const std::size_t version_end = src.find('\n', src.find("#version"));
-    src = src.substr(0, version_end + 1) + shader_defines() + "#line 2\n" +
-          src.substr(version_end + 1);
-
-    GLuint comp = compile(GL_COMPUTE_SHADER, resolve_includes(src));
+    GLuint comp = compile(GL_COMPUTE_SHADER, resolve_includes(with_defines(read_file(compute_path))));
 
     id_ = glCreateProgram();
     glAttachShader(id_, comp);
@@ -105,8 +112,8 @@ Shader::Shader(const std::string& compute_path) {
 }
 
 Shader::Shader(const std::string& vert_path, const std::string& frag_path) {
-    GLuint vert = compile(GL_VERTEX_SHADER, read_file(vert_path));
-    GLuint frag = compile(GL_FRAGMENT_SHADER, read_file(frag_path));
+    GLuint vert = compile(GL_VERTEX_SHADER, with_defines(read_file(vert_path)));
+    GLuint frag = compile(GL_FRAGMENT_SHADER, with_defines(read_file(frag_path)));
 
     id_ = glCreateProgram();
     glAttachShader(id_, vert);
@@ -169,3 +176,6 @@ void Shader::set_float_array(const char* name, const float* data, int count) con
 void Shader::set_uint(const char* name, uint32_t value) const {
     glUniform1ui(glGetUniformLocation(id_, name), value);
 }
+
+}  // namespace gl
+}  // namespace fluid

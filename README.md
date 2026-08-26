@@ -46,6 +46,16 @@ dissipation, the side walls are free-slip so fluid pushed against them still
 falls freely. `reflect_face` in `step.comp` survives only as a penetration
 catcher, not as the boundary condition.
 
+**Obstacles.** Mirroring reflects across an infinite plane, so it cannot express
+a shape. Solid geometry inside the domain is instead built from **boundary
+particles**: frozen particles on the fluid lattice that contribute mass to the
+density sum and carry the pressure of whichever fluid particle is looking at
+them, so non-penetration falls out of the same pressure force as everything
+else. They live in their own buffers with their own grid, and because they never
+move that grid is built once at spawn instead of once per step. The two schemes
+are additive - the domain box keeps its mirrors, so scenes without obstacles are
+unaffected.
+
 **Integration and stability.** A **midpoint (RK2)** integrator evaluates the
 full pipeline twice per step. The timestep is **adaptive**: a GPU reduction
 finds the maximum particle speed and acceleration each frame, and two CFL
@@ -62,46 +72,80 @@ slips through - a bad step costs a particle its momentum, never the
 simulation its stability.
 
 **Measurement.** Each run writes `run.csv` (step, sim time, dt, max
-speed/acceleration, sampled every 4th step); `gnuplot dt.plt` plots it against
-the two CFL candidate timesteps, so the trace shows *which* condition is
-limiting `dt` at each moment rather than just the result. Over a 477 s run the
+speed/acceleration, sampled every 4th step), which shows *which* CFL condition
+is limiting `dt` at each moment rather than just the result. Over a 477 s run the
 velocity condition never once bound `dt` while the acceleration condition bound
 it in 5.5% of frames.
 
 **Validation.** The solver is being checked against the planar **dam break**
 benchmark [8, 9]: a column of width `a` and height `n·a` is released against the
-left wall (`DAM_BREAK_MODE` in `defs.hpp`) and the surge front along the floor
-is logged in dimensionless form, `Z = (x_front − x₀)/a` against `T = t·√(2g/a)`,
-to a file named after the force parameters it was run at
+left wall (`--experiment dam-break`; `--help` lists the scenes) and the surge
+front along the floor is logged in dimensionless form, `Z = (x_front − x₀)/a`
+against `T = t·√(2g/a)`, to a file named after the force parameters it was
+run at
 (`dam_break_coh<c>_visc<v>_ten<t>.csv`, with the stiffness in a column) so a
 sweep is a single session and no two settings can land in the same file. The
 front is defined as a high percentile of `x` among
 particles within one kernel radius of the floor - a height gate rejects airborne
 spray, the percentile rejects lone stragglers, and a genuine surge passes both.
 Runs reproduce to three significant figures despite frame timing varying the
-`dt` sequence between them. Raw data, plotting scripts, and figures live under
-[`experiments/`](experiments/).
+`dt` sequence between them. Raw traces are not committed; `experiments/`
+keeps the reduction script and the write-up of what the sweeps found.
+
+**Applications.** Beyond the benchmark, the solver is used to show that
+textbook fluid behaviour falls out of the discretisation rather than being put in
+by hand. `--experiment pipe` runs a **periodic** channel, walls and throat built
+from boundary particles, driven by a body force with gravity off. Fluid leaving
+the right edge re-enters on the left, which keeps the particle count fixed - the
+neighbour search wraps across the seam and shifts those neighbours by one period,
+so the grid has to tile the wrap exactly (`PERIOD_X = GRID_W * CELL_SIZE`). The
+channel is deliberately smaller than the fluid's rest volume so it runs
+pressurised rather than settling against the EOS's zero clamp. Nothing in the
+solver knows Bernoulli's equation; it integrates mass and momentum, and
+`p + rho*v^2/2 + rho*g*y` is a first integral of that. It reaches a true steady
+state, and the two logged bands answer different questions - continuity is a
+statement about a cross-section, Bernoulli about a streamline.
+
+| | measured | expected |
+|---|---|---|
+| speed ratio, full section | 2.04 (sd 0.042) | 2.00, the area ratio |
+| pressure at the throat | -8% | drop |
+| `p + rho*v^2/2` deviation | 3.1% median | 0 |
+
+Measured over 196 profiles at Mach 0.093. The same run at Mach 0.24 gives a much
+larger pressure drop (29%) but twice the Bernoulli error (6.6%), which is the
+compressibility limit showing up where the theory says it should. Velocity
+recovers fully downstream of the throat while pressure does not - that asymmetry
+is the viscous loss, and in ideal flow both would be symmetric.
 
 **Interaction & tooling.** Drag with the mouse to push or pull the fluid,
 pause and step/rewind through a GPU-resident history buffer, and tune the
 physics live - gravity, pressure, rest density, viscosity, tension,
-cohesion, timestep, and time scale - through a Dear ImGui panel.
+cohesion, timestep, and time scale - through a Dear ImGui panel. `P` switches
+the particle colouring between speed and pressure; the pressure view reads the
+same Tait EOS the solver runs on, so the field driving the motion is visible
+rather than only its result.
 
 ### Working on now
 
-Quantitative validation rather than new physics. The dam break gives a curve
-with a known shape to compare against, which turns "it looks like water" into a
-measurable distance from published data. Four parameter studies are done -
-cohesion, surface tension, stiffness, viscosity - and chasing a residual through
-the first three turned it into two solver findings, one of which invalidated a
-headline from the first. Every front number below was measured with free-slip
-walls, before the floor became no-slip; the surge runs along that floor, so the
-sweeps need re-running before they are quoted as final:
+Applications, on top of the validation. The solver now selects a scene from the
+command line (`--experiment`, `--help` lists them), and solid geometry inside the
+domain is built from boundary particles, so a scene is a set of quads plus a
+table row. That gave the periodic pipe above, which is the first result that is
+not a benchmark reproduction: a textbook law recovered from a solver that was
+never told about it. Next is either a runtime particle count - the last
+compile-time constant blocking a convergence study - or XSPH, to suppress the
+particle layering the pressure view makes visible.
 
-<p align="center">
-  <img src="media/dam_break_sweep_k4000.png"
-       alt="Surge front vs cohesion at the converged stiffness" width="640">
-</p>
+Underneath that, quantitative validation rather than new physics. The dam break
+gives a curve with a known shape to compare against, which turns "it looks like
+water" into a measurable distance from published data. Four parameter studies
+are done - cohesion, surface tension, stiffness, viscosity - and chasing a
+residual through the first three turned it into two solver findings, one of
+which invalidated a headline from the first. Every front number below was
+measured with free-slip walls, before the floor became no-slip; the surge runs
+along that floor, so the sweeps need re-running before they are quoted as
+final:
 
 - **Cohesion sweep**, run at the stock stiffness and again converged at
   `k = 4000`. Cohesion 50 delays the onset by 2.3×, in both, and is the only
@@ -271,6 +315,7 @@ The compiled binary is placed in `bin/`:
 ```
 src/
   main.cc          - window/context setup, frame loop, adaptive-dt CFL clamp
+  experiment.cc    - scene registry + command-line selection
   simulation.cc    - owns all GPU buffers + shaders, dispatches the pipeline
   renderer.cc      - draws particles straight from the simulation's buffers
   shader.cc        - RAII OpenGL shader-program wrapper (graphics + compute)
@@ -281,6 +326,9 @@ include/
   history.hpp      - GPU-resident ring buffer of past states for rewind
   input.hpp        - keyboard/mouse polling helpers
   dam_break.hpp    - surge-front criterion + benchmark logging
+  experiment.hpp   - the scene enum and its table
+  obstacle.hpp     - solid geometry as convex quads, per scene
+  profile.hpp      - x-binned duct profiling for the pipe
   (+ headers for the .cc files above)
 shaders/
   count.comp       - counting sort 1/3: histogram of particles per cell
@@ -291,10 +339,11 @@ shaders/
   midpoint.comp    - RK2 stage 1: build the half-step state
   step.comp        - RK2 stage 2: final advance, boundaries, velocity cap
   reduce_max.comp  - max speed/acceleration reduction for the adaptive dt
-  particle.vert/.frag - point-sprite rendering, coloured by speed
+  particle.vert/.frag - point-sprite rendering, coloured by speed or pressure
   line.vert/.frag  - debug line/circle rendering
 external/glad/     - bundled OpenGL loader
-experiments/       - benchmark data, gnuplot scripts, and figures
+experiments/       - reduction script and the sweep write-up
+media/plots/       - gnuplot scripts for the four SPH kernels
 CMakeLists.txt     - top-level build (fetches GLFW/GLM/ImGui, builds GLAD)
 run.sh             - build helper functions
 ```
@@ -338,7 +387,11 @@ fluid touches a wall. A reflected image additionally inherits the fluid's own
 density and disorder, so counter-pressure rises automatically under compression
 and no lattice structure is imprinted on the fluid. The trade is generality:
 mirroring only expresses planar, axis-aligned walls. Anything curved, angled, or
-moving requires boundary particles, and that is the point at which to switch.
+moving requires boundary particles, and that is the point at which to switch -
+so obstacles use them and the domain box does not. Measured on the dam break
+with a block on the bed, the block excludes 92% of the particles that occupy its
+volume in the same run without it (16 against 200); the residual is surface-layer
+leakage at Mach 0.75, well past where the scheme is valid.
 
 The image's tangential velocity is the slip condition, blended per face as
 `mix(-v, v*scale, s)`. The normal component is identical at both endpoints, so

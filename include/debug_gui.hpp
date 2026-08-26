@@ -4,6 +4,9 @@
 
 struct GLFWwindow;
 
+namespace fluid {
+namespace ui {
+
 // RAII wrapper around Dear ImGui; confines every ImGui symbol to debug_gui.cc.
 class DebugGui {
 public:
@@ -18,3 +21,6 @@ public:
     void end_frame();                          // render the UI on top of the scene
     bool wants_mouse() const;                  // true when the cursor is over the panel
 };
+
+}  // namespace ui
+}  // namespace fluid

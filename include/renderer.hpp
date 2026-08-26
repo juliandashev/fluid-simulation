@@ -5,7 +5,15 @@
 #include <glm/vec2.hpp>
 #include <vector>
 
+#include "defs.hpp"
+#include "obstacle.hpp"
 #include "shader.hpp"
+
+namespace fluid {
+namespace gl {
+
+// What the particle colour ramp maps; the sim buffer differs per field.
+enum class ColorField : int32_t { Speed, Pressure };
 
 // Owns all GPU state (VAOs, VBOs, shaders) and handles the CPU -> GPU
 // uploads + draws each frame. Requires a current GL context.
@@ -19,7 +27,9 @@ public:
     Renderer& operator=(const Renderer&) = delete;
 
     void draw_circle(glm::vec2 center, float_t radius, glm::vec3 color);
-    void render(GLuint position_buffer, GLuint speed_buffer, size_t count);
+    void draw_quads(const std::vector<obstacle::Quad>& quads);
+    void render(GLuint position_buffer, GLuint field_buffer, ColorField field,
+                const SimParams& params, size_t count);
 
 private:
     Shader shader_;
@@ -30,7 +40,11 @@ private:
 
     GLuint vao_ = 0;
     GLuint bound_positions_ = 0;  // handles baked into vao_; a change rebuilds it
-    GLuint bound_speeds_ = 0;
+    GLuint bound_field_ = 0;
+
 
     std::vector<glm::vec2> positions_;  // reused staging buffer, avoids per-frame allocation
 };
+
+}  // namespace gl
+}  // namespace fluid

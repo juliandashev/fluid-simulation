@@ -11,6 +11,7 @@ layout(std430, binding = 10) buffer MidVelocities { vec2 mid_velocities[]; };
 uniform uint u_num_particles;
 uniform float u_dt;
 uniform float u_gravity;
+uniform vec2  u_body_accel;  // drives periodic channel flow; zero elsewhere
 
 // RK2 stage 1 -> 2 (accelerations holds a1). force.comp omits gravity; add it.
 void main() {
@@ -18,5 +19,6 @@ void main() {
     if (i >= u_num_particles) return;
 
     mid_positions[i] = positions[i] + 0.5 * u_dt * velocities[i];
-    mid_velocities[i] = velocities[i] + 0.5 * u_dt * (accelerations[i] + vec2(0.0, u_gravity));
+    mid_velocities[i] =
+        velocities[i] + 0.5 * u_dt * (accelerations[i] + vec2(0.0, u_gravity) + u_body_accel);
 }

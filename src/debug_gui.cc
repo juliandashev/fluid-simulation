@@ -7,6 +7,9 @@
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
 
+namespace fluid {
+namespace ui {
+
 DebugGui::DebugGui(GLFWwindow* window) {
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -28,7 +31,9 @@ void DebugGui::begin_frame() {
 }
 
 // InputFloat takes arbitrary typed text, so every value here reaches the solver unchecked.
-static void clamp_params(SimParams& params) {
+namespace {
+
+void clamp_params(SimParams& params) {
     // Divisor and sqrt argument in create_column; the ceiling keeps its int32_t cast in range.
     constexpr float_t MIN_DENSITY = 0.01f;
     constexpr float_t MAX_DENSITY = 1000.0f;
@@ -41,8 +46,11 @@ static void clamp_params(SimParams& params) {
     params.tension_strength = std::max(params.tension_strength, 0.0f);
     params.cohesion_strength = std::max(params.cohesion_strength, 0.0f);
     params.time_scale = std::max(params.time_scale, 0.0f);
+    params.draw_scale = std::clamp(params.draw_scale, 0.1f, 4.0f);
     // gravity is deliberately unclamped: negative is its normal state.
 }
+
+}  // namespace
 
 void DebugGui::draw_params(SimParams& params) {
     ImGui::Begin("Sim Params");
@@ -57,6 +65,8 @@ void DebugGui::draw_params(SimParams& params) {
     ImGui::InputFloat("tension threshold", &params.tension_threshold, 0.1f, 0.5f, "%.2f");
     ImGui::InputFloat("tension strength", &params.tension_strength, 0.1f, 0.5f, "%.2f");
     ImGui::InputFloat("cohesion", &params.cohesion_strength, 5.0f, 25.0f, "%.1f");
+    ImGui::InputFloat("body force x", &params.body_accel_x, 1.0f, 5.0f, "%.2f");
+    ImGui::InputFloat("particle size", &params.draw_scale, 0.05f, 0.2f, "%.2f");
 
     if (ImGui::Button("Reset to defaults")) {
         params = SimParams{};
@@ -72,3 +82,6 @@ void DebugGui::end_frame() {
 }
 
 bool DebugGui::wants_mouse() const { return ImGui::GetIO().WantCaptureMouse; }
+
+}  // namespace ui
+}  // namespace fluid

@@ -4,6 +4,9 @@
 
 #include "defs.hpp"
 
+namespace fluid {
+namespace gl {
+
 // GPU-resident snapshot ring; bookkeeping on the CPU. Needs a current context.
 class History {
 public:
@@ -83,3 +86,6 @@ private:
     GLsizeiptr vec2_bytes_;   // one snapshot's positions (or velocities) in bytes
     GLsizeiptr float_bytes_;  // one snapshot's speeds in bytes
 };
+
+}  // namespace gl
+}  // namespace fluid

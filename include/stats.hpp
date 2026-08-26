@@ -2,6 +2,9 @@
 
 #include <cmath>
 
+namespace fluid {
+namespace log {
+
 // Density field summary. Target: sigma/rho_0 ~ 1% (Monaghan 2005).
 struct DensityStats {
     float_t min = 0.0f;
@@ -18,3 +21,6 @@ struct AccelStats {
     float_t p90 = 0.0f;
     float_t max = 0.0f;
 };
+
+}  // namespace log
+}  // namespace fluid

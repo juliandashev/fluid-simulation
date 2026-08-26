@@ -19,6 +19,8 @@ uniform float u_domain_max;
 uniform float u_bounce_damping;
 uniform float u_eps;
 uniform float u_max_speed;
+uniform vec2  u_body_accel;
+uniform float u_period_x;  // > 0: x wraps instead of reflecting
 
 layout(std430, binding = 3) buffer Accelerations {
     vec2 accelerations[];
@@ -51,7 +53,7 @@ void main() {
     vec2 position = positions[i];
     vec2 velocity = velocities[i];
 
-    velocity += (vec2(0.0, u_gravity) + accelerations[i]) * u_dt;
+    velocity += (vec2(0.0, u_gravity) + u_body_accel + accelerations[i]) * u_dt;
     position += mid_velocities[i] * u_dt;
 
     // A NaN position never un-NaNs (comparisons below are all false for it)
@@ -61,8 +63,13 @@ void main() {
         velocity = vec2(0.0);
     }
 
-    reflect_face(position.x, velocity.x, -u_domain_half_x,  1.0);
-    reflect_face(position.x, velocity.x,  u_domain_half_x, -1.0);
+    if (u_period_x > 0.0) {
+        // Wrap into [-P/2, P/2); the grid tiles exactly that span.
+        position.x -= u_period_x * floor(position.x / u_period_x + 0.5);
+    } else {
+        reflect_face(position.x, velocity.x, -u_domain_half_x,  1.0);
+        reflect_face(position.x, velocity.x,  u_domain_half_x, -1.0);
+    }
     reflect_face(position.y, velocity.y,  u_domain_min,     1.0);
     reflect_face(position.y, velocity.y,  u_domain_max,    -1.0);
 

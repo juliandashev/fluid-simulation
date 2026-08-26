@@ -17,8 +17,9 @@ vec2 gather_density(vec2 position_i) {
     for (int dy = -1; dy <= 1; ++dy) {
         for (int dx = -1; dx <= 1; ++dx) {
             ivec2 cell = my_cell + ivec2(dx, dy);
+            float shift;
 
-            if (cell.x < 0 || cell.x >= u_grid_w || cell.y < 0 || cell.y >= u_grid_h) {
+            if (!resolve_cell(cell, shift)) {
                 continue;
             }
 
@@ -30,7 +31,7 @@ vec2 gather_density(vec2 position_i) {
             for (uint k = start; k < end; ++k) {
                 uint j = sorted_indices[k];
 
-                vec2 offset = positions[j] - position_i;
+                vec2 offset = positions[j] + vec2(shift, 0.0) - position_i;
                 float distance_sq = dot(offset, offset);
 
                 if (distance_sq >= u_kernel_radius_sq) {
@@ -42,7 +43,7 @@ vec2 gather_density(vec2 position_i) {
                 // j == i is included deliberately: a particle resting on the
                 // floor is supported by its own image before anything else.
                 for (int m = 0; m < im.count; ++m) {
-                    vec2 mirrored = positions[j] * im.scale[m] + im.offset[m];
+                    vec2 mirrored = (positions[j] + vec2(shift, 0.0)) * im.scale[m] + im.offset[m];
                     vec2 m_offset = mirrored - position_i;
                     float m_dist_sq = dot(m_offset, m_offset);
 
@@ -59,9 +60,47 @@ vec2 gather_density(vec2 position_i) {
     return vec2(density, 0.0);  // .y kept allocated so the buffer layout holds
 }
 
+// Boundary particles carry the fluid's mass, so a solid stops reading as vacuum
+// and the density deficiency at a wall disappears.
+float gather_solid_density(vec2 position_i) {
+    if (u_num_solids == 0u) {
+        return 0.0;
+    }
+
+    float density = 0.0;
+    ivec2 my_cell = ivec2(floor((position_i - u_grid_origin) / u_cell_size));
+
+    for (int dy = -1; dy <= 1; ++dy) {
+        for (int dx = -1; dx <= 1; ++dx) {
+            ivec2 cell = my_cell + ivec2(dx, dy);
+            float shift;
+
+            if (!resolve_cell(cell, shift)) {
+                continue;
+            }
+
+            uint ci = uint(cell.y * u_grid_w + cell.x);
+
+            uint start = solid_cell_starts[ci];
+            uint end = start + solid_cell_counts[ci];
+
+            for (uint k = start; k < end; ++k) {
+                vec2 offset =
+                    solid_positions[solid_sorted_indices[k]] + vec2(shift, 0.0) - position_i;
+
+                // The kernel already returns 0 beyond h.
+                density += u_mass * smoothing_kernel(u_kernel_radius_sq, dot(offset, offset));
+            }
+        }
+    }
+
+    return density;
+}
+
 void main() {
     uint i = gl_GlobalInvocationID.x;
     if (i >= u_num_particles) return;
 
-    densities[i] = gather_density(positions[i]);
+    vec2 position_i = positions[i];
+    densities[i] = gather_density(position_i) + vec2(gather_solid_density(position_i), 0.0);
 }

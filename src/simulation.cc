@@ -12,6 +12,8 @@
 
 #include "defs.hpp"
 
+namespace fluid {
+
 Simulation::Simulation(uint32_t count)
     : step_(SHADER_DIR "/step.comp"),
       midpoint_(SHADER_DIR "/midpoint.comp"),
@@ -56,6 +58,20 @@ Simulation::Simulation(uint32_t count)
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, max_kinematics_ssbo_);
     glBufferData(GL_SHADER_STORAGE_BUFFER, 2 * sizeof(GLuint), nullptr, GL_DYNAMIC_READ);
 
+    // Solid geometry. Sized for real at spawn_solids(); one element keeps the
+    // bindings legal while a scene has no obstacles.
+    for (GLuint* b : {&solid_position_ssbo_, &solid_sorted_indices_}) {
+        glGenBuffers(1, b);
+        glBindBuffer(GL_SHADER_STORAGE_BUFFER, *b);
+        glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(glm::vec2), nullptr, GL_STATIC_DRAW);
+    }
+
+    for (GLuint* b : {&solid_cell_counts_, &solid_cell_starts_}) {
+        glGenBuffers(1, b);
+        glBindBuffer(GL_SHADER_STORAGE_BUFFER, *b);
+        glBufferData(GL_SHADER_STORAGE_BUFFER, NUM_CELLS * sizeof(GLuint), nullptr, GL_STATIC_DRAW);
+    }
+
     glGenBuffers(1, &cell_counts_);
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, cell_counts_);
     glBufferData(GL_SHADER_STORAGE_BUFFER, NUM_CELLS * sizeof(GLuint), nullptr, GL_DYNAMIC_DRAW);
@@ -75,6 +91,7 @@ Simulation::Simulation(uint32_t count)
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
 
     set_static_uniforms();
+    set_periodic_x(0.0f);
 }
 
 Simulation::~Simulation() {
@@ -86,6 +103,10 @@ Simulation::~Simulation() {
     glDeleteBuffers(1, &acceleration_ssbo_);
     glDeleteBuffers(1, &speed_ssbo_);
     glDeleteBuffers(1, &max_kinematics_ssbo_);
+    glDeleteBuffers(1, &solid_position_ssbo_);
+    glDeleteBuffers(1, &solid_cell_counts_);
+    glDeleteBuffers(1, &solid_cell_starts_);
+    glDeleteBuffers(1, &solid_sorted_indices_);
     glDeleteBuffers(1, &cell_counts_);
     glDeleteBuffers(1, &cell_starts_);
     glDeleteBuffers(1, &cell_cursors_);
@@ -103,6 +124,10 @@ void Simulation::step(float_t delta_time, const SimParams& params) {
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 8, speed_ssbo_);
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 9, mid_position_ssbo_);
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 10, mid_velocity_ssbo_);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 11, solid_position_ssbo_);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 12, solid_cell_counts_);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 13, solid_cell_starts_);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 14, solid_sorted_indices_);
 
     const GLuint groups = (count_ + 255) / 256;
 
@@ -117,13 +142,17 @@ void Simulation::step(float_t delta_time, const SimParams& params) {
     force_.set_float("u_tension_strength", params.tension_strength);
     force_.set_float("u_cohesion_strength", params.cohesion_strength);
 
+    const glm::vec2 body_accel(params.body_accel_x, 0.0f);
+
     midpoint_.use();
     midpoint_.set_float("u_dt", delta_time);
     midpoint_.set_float("u_gravity", params.gravity);
+    midpoint_.set_vec2("u_body_accel", body_accel);
 
     step_.use();
     step_.set_float("u_dt", delta_time);
     step_.set_float("u_gravity", params.gravity);
+    step_.set_vec2("u_body_accel", body_accel);
 
     // RK2 stage 1: a1 at the current state, then the half-step state from it
     compute_accelerations(position_ssbo_, velocity_ssbo_);
@@ -147,6 +176,100 @@ void Simulation::step(float_t delta_time, const SimParams& params) {
 
 // Grid + density + force at the given state. All shaders read slots 0/1, so
 // the midpoint evaluation is just a matter of which buffers get bound.
+void Simulation::spawn_at(const std::vector<glm::vec2>& positions) {
+    upload_state(positions);
+    debug_density_stats(TARGET_DENSITY);
+}
+
+// Moves the grid origin with it: the cells have to tile the wrapped span, not
+// the window, or a neighbour crossing the seam arrives at the wrong offset.
+void Simulation::set_periodic_x(float_t period) {
+    period_x_ = period;
+
+    const glm::vec2 origin(period > 0.0f ? -0.5f * period : -DOMAIN_HALF_X, DOMAIN_MIN);
+
+    for (gl::Shader* s : {&count_shader_, &scatter_, &density_, &force_}) {
+        s->use();
+        s->set_vec2("u_grid_origin", origin);
+    }
+
+    for (gl::Shader* s : {&density_, &force_, &step_}) {
+        s->use();
+        s->set_float("u_period_x", period);
+    }
+}
+
+void Simulation::spawn_solids(const std::vector<glm::vec2>& positions) {
+    solid_count_ = static_cast<uint32_t>(positions.size());
+    const std::size_t n = std::max<std::size_t>(1, solid_count_);
+
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, solid_position_ssbo_);
+    glBufferData(GL_SHADER_STORAGE_BUFFER, n * sizeof(glm::vec2),
+                 solid_count_ > 0 ? positions.data() : nullptr, GL_STATIC_DRAW);
+
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, solid_sorted_indices_);
+    glBufferData(GL_SHADER_STORAGE_BUFFER, n * sizeof(GLuint), nullptr, GL_STATIC_DRAW);
+
+    for (gl::Shader* s : {&density_, &force_}) {
+        s->use();
+        s->set_uint("u_num_solids", solid_count_);
+    }
+
+    build_solid_grid();
+
+    if (solid_count_ > 0) {
+        std::cout << "Solid geometry: " << solid_count_ << " boundary particles\n";
+    }
+}
+
+// Solids never move, so this runs once per spawn rather than once per step -
+// no count/scan/scatter in the hot loop, and no barrier to sequence it against.
+void Simulation::build_solid_grid() {
+    GLuint zero = 0;
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, solid_cell_counts_);
+    glClearBufferData(GL_SHADER_STORAGE_BUFFER, GL_R32UI, GL_RED_INTEGER, GL_UNSIGNED_INT, &zero);
+
+    if (solid_count_ > 0) {
+        // The fluid's own three grid shaders, pointed at the solid buffers.
+        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, solid_position_ssbo_);
+        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 4, solid_cell_counts_);
+        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 5, solid_cell_starts_);
+        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 6, cell_cursors_);  // scratch either way
+        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 7, solid_sorted_indices_);
+        glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+
+        for (gl::Shader* s : {&count_shader_, &scatter_}) {
+            s->use();
+            s->set_uint("u_num_particles", solid_count_);
+        }
+
+        const GLuint groups = (solid_count_ + 255) / 256;
+
+        count_shader_.use();
+        glDispatchCompute(groups, 1, 1);
+        glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+
+        scan_.use();
+        glDispatchCompute(1, 1, 1);
+        glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+
+        scatter_.use();
+        glDispatchCompute(groups, 1, 1);
+        glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+
+        // Restore the fluid count; step() reuses these same two shaders.
+        for (gl::Shader* s : {&count_shader_, &scatter_}) {
+            s->use();
+            s->set_uint("u_num_particles", count_);
+        }
+    }
+
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 11, solid_position_ssbo_);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 12, solid_cell_counts_);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 13, solid_cell_starts_);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 14, solid_sorted_indices_);
+}
+
 void Simulation::compute_accelerations(GLuint positions, GLuint velocities) {
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, positions);
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, velocities);
@@ -183,7 +306,9 @@ void Simulation::compute_accelerations(GLuint positions, GLuint velocities) {
 }
 
 // Reads exponent bits, not std::isfinite, which -ffast-math breaks.
-static float_t decode_max_bits(GLuint bits) {
+namespace {
+
+float_t decode_max_bits(GLuint bits) {
     if ((bits & 0x7F800000u) == 0x7F800000u) {
         return 1e6f;
     }
@@ -192,6 +317,8 @@ static float_t decode_max_bits(GLuint bits) {
     std::memcpy(&value, &bits, sizeof(value));
     return value;
 }
+
+}  // namespace
 
 // Once per rendered frame, not per substep. Values are one frame stale; the
 // CFL safety factors absorb that.
@@ -339,7 +466,7 @@ void Simulation::upload_state(const std::vector<glm::vec2>& positions) {
 void Simulation::set_static_uniforms() {
     const glm::vec2 origin(-DOMAIN_HALF_X, DOMAIN_MIN);
 
-    for (Shader* s : {&count_shader_, &scatter_, &density_, &force_}) {
+    for (gl::Shader* s : {&count_shader_, &scatter_, &density_, &force_}) {
         s->use();  // uniforms go to the *currently bound* program
         s->set_uint("u_num_particles", count_);
         s->set_vec2("u_grid_origin", origin);
@@ -358,7 +485,7 @@ void Simulation::set_static_uniforms() {
     reduce_max_.set_uint("u_num_particles", count_);
 
     // Domain bounds reach density/force too: both build the wall images.
-    for (Shader* s : {&density_, &force_}) {
+    for (gl::Shader* s : {&density_, &force_}) {
         s->use();
         s->set_float("u_kernel_radius", KERNEL_RADIUS);
         s->set_float("u_kernel_radius_sq", KERNEL_RADIUS_SQ);
@@ -369,9 +496,15 @@ void Simulation::set_static_uniforms() {
         s->set_float("u_wall_offset", WALL_OFFSET);
     }
 
+    for (gl::Shader* s : {&density_, &force_}) {
+        s->use();
+        s->set_uint("u_num_solids", solid_count_);
+    }
+
     force_.use();
     force_.set_float("u_interaction_radius", INTERACTION_RADIUS);
     force_.set_vec2("u_wall_slip", {WALL_SLIP_FLOOR, WALL_SLIP_SIDE});
+    force_.set_float("u_solid_slip", SOLID_SLIP);
 
     step_.use();
     step_.set_uint("u_num_particles", count_);
@@ -383,8 +516,30 @@ void Simulation::set_static_uniforms() {
     step_.set_float("u_max_speed", MAX_SPEED);
 }
 
-DensityStats Simulation::density_stats() const {
-    DensityStats stats;
+std::vector<float_t> Simulation::read_speeds() const {
+    std::vector<float_t> speeds(count_);
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, speed_ssbo_);
+    glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, count_ * sizeof(float_t), speeds.data());
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+    return speeds;
+}
+
+// The buffer is vec2 with the value in .x, so this strips the padding.
+std::vector<float_t> Simulation::read_densities() const {
+    std::vector<glm::vec2> raw(count_);
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, density_ssbo_);
+    glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, count_ * sizeof(glm::vec2), raw.data());
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+
+    std::vector<float_t> out(count_);
+    for (uint32_t i = 0; i < count_; ++i) {
+        out[i] = raw[i].x;
+    }
+    return out;
+}
+
+log::DensityStats Simulation::density_stats() const {
+    log::DensityStats stats;
     if (count_ == 0) {
         return stats;
     }
@@ -430,8 +585,8 @@ DensityStats Simulation::density_stats() const {
 
 // Ranked on |a + g|, not |a|: force.comp excludes gravity, so this puts
 // equilibrium at 0 rather than 9.81.
-AccelStats Simulation::accel_stats(float_t gravity) const {
-    AccelStats stats;
+log::AccelStats Simulation::accel_stats(float_t gravity) const {
+    log::AccelStats stats;
     if (count_ == 0) {
         return stats;
     }
@@ -508,10 +663,12 @@ void Simulation::debug_density_stats(float_t rest_density) {
     compute_accelerations(position_ssbo_, velocity_ssbo_);
     glMemoryBarrier(GL_BUFFER_UPDATE_BARRIER_BIT);  // densities land before readback
 
-    const DensityStats stats = density_stats();
+    const log::DensityStats stats = density_stats();
     const float_t spread = rest_density > 0.0f ? 100.0f * stats.sigma / rest_density : 0.0f;
 
     std::cout << "density  min=" << stats.min << "  median=" << stats.median
               << "  p90=" << stats.p90 << "  max=" << stats.max
               << "  sigma/rho_0=" << spread << "% (target ~1%)" << std::endl;
 }
+
+}  // namespace fluid

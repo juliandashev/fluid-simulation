@@ -8,6 +8,9 @@
 
 #include "stats.hpp"
 
+namespace fluid {
+namespace log {
+
 class Logger {
     std::ofstream out_;
 
@@ -32,3 +35,6 @@ public:
              << acc.min << ',' << acc.median << ',' << acc.p90 << ',' << acc.max << '\n';
     }
 };
+
+}  // namespace log
+}  // namespace fluid

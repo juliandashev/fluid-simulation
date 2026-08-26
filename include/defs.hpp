@@ -3,6 +3,8 @@
 #include <cmath>
 #include <cstdint>
 
+namespace fluid {
+
 // Resolution. Every length and mass below derives from this, so refining the
 // whole simulation is one integer; n_x = 44 is the historical setting.
 constexpr int32_t PARTICLES_ACROSS = 44;  // n_x, particles across the column
@@ -26,6 +28,7 @@ constexpr uint32_t MAX_HISTORY = 300;  // ~21 MB ceiling at 72 KB/snapshot
 // Rendering
 constexpr float_t PARTICLE_DRAW_SIZE = 1.0f;
 constexpr float_t SPEED_COLOR_MAX = 15.0f;        // speed that maps to full red
+constexpr float_t PRESSURE_COLOR_MAX = 1'000.0f;  // pressure that maps to full red
 constexpr float_t INTERACTION_STRENGTH = 100.0f;  // mouse force
 constexpr float_t INTERACTION_RADIUS = 30.0f;
 
@@ -43,6 +46,7 @@ constexpr float_t WALL_OFFSET = 0.25f * PARTICLE_SPACING;
 // Tangential velocity an image keeps: 1 = free-slip, 0 = no-slip.
 constexpr float_t WALL_SLIP_FLOOR = 0.0f;  // sliding along the floor/ceiling
 constexpr float_t WALL_SLIP_SIDE = 1.0f;   // falling along a side wall
+constexpr float_t SOLID_SLIP = 0.0f;       // same, for boundary particles
 
 // Time stepping
 constexpr float_t DT = 0.015f;               // adaptive ceiling
@@ -64,13 +68,17 @@ constexpr float_t EPS = 1.0f;                                  // boundary epsil
 
 // Dam break benchmark (Martin & Moyce 1952, planar; Koshizuka & Oka 1996): a
 // column of width a and height n*a released against the left wall at t=0.
-constexpr bool DAM_BREAK_MODE = false;  // spawn the column instead of the centered block
+//   ./fluid_simulation --experiment dam-break
 
 // Spatial grid. CELL_SIZE = h is what guarantees a 3x3 walk covers every neighbour.
 constexpr float_t CELL_SIZE = KERNEL_RADIUS;
 constexpr int32_t GRID_W = static_cast<int32_t>(2.0f * DOMAIN_HALF_X / CELL_SIZE) + 1;       // ~54
 constexpr int32_t GRID_H = static_cast<int32_t>((DOMAIN_MAX - DOMAIN_MIN) / CELL_SIZE) + 1;  // ~31
 constexpr int32_t NUM_CELLS = GRID_W * GRID_H;  // ~1674
+
+// Wrap width for periodic-x scenes. The grid must tile it exactly, or a
+// neighbour carried across the seam lands at the wrong offset.
+constexpr float_t PERIOD_X = GRID_W * CELL_SIZE;
 
 // Runtime-tunable copy of the force parameters, defaulting to the values above.
 struct SimParams {
@@ -83,4 +91,8 @@ struct SimParams {
     float_t tension_threshold = SURFACE_TENSION;
     float_t tension_strength = SURFACE_TENSION_STRENGTH;
     float_t cohesion_strength = COHESION_STRENGTH;
+    float_t body_accel_x = 0.0f;  // drives the periodic channel; zero elsewhere
+    float_t draw_scale = 1.0f;    // dot size as a fraction of the lattice pitch
 };
+
+}  // namespace fluid
