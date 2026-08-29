@@ -14,7 +14,7 @@
 
 namespace fluid {
 
-Simulation::Simulation(uint32_t count)
+Simulation::Simulation(const Resolution& res)
     : step_(SHADER_DIR "/step.comp"),
       midpoint_(SHADER_DIR "/midpoint.comp"),
       density_(SHADER_DIR "/density.comp"),
@@ -23,7 +23,7 @@ Simulation::Simulation(uint32_t count)
       scan_(SHADER_DIR "/scan.comp"),
       scatter_(SHADER_DIR "/scatter.comp"),
       reduce_max_(SHADER_DIR "/reduce_max.comp"),
-      count_(count) {
+      res_(res), count_(res.count) {
     // Allocate only; spawn_particles() fills positions/velocities.
     glGenBuffers(1, &position_ssbo_);
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, position_ssbo_);
@@ -69,20 +69,20 @@ Simulation::Simulation(uint32_t count)
     for (GLuint* b : {&solid_cell_counts_, &solid_cell_starts_}) {
         glGenBuffers(1, b);
         glBindBuffer(GL_SHADER_STORAGE_BUFFER, *b);
-        glBufferData(GL_SHADER_STORAGE_BUFFER, NUM_CELLS * sizeof(GLuint), nullptr, GL_STATIC_DRAW);
+        glBufferData(GL_SHADER_STORAGE_BUFFER, res_.num_cells * sizeof(GLuint), nullptr, GL_STATIC_DRAW);
     }
 
     glGenBuffers(1, &cell_counts_);
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, cell_counts_);
-    glBufferData(GL_SHADER_STORAGE_BUFFER, NUM_CELLS * sizeof(GLuint), nullptr, GL_DYNAMIC_DRAW);
+    glBufferData(GL_SHADER_STORAGE_BUFFER, res_.num_cells * sizeof(GLuint), nullptr, GL_DYNAMIC_DRAW);
 
     glGenBuffers(1, &cell_starts_);
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, cell_starts_);
-    glBufferData(GL_SHADER_STORAGE_BUFFER, NUM_CELLS * sizeof(GLuint), nullptr, GL_DYNAMIC_DRAW);
+    glBufferData(GL_SHADER_STORAGE_BUFFER, res_.num_cells * sizeof(GLuint), nullptr, GL_DYNAMIC_DRAW);
 
     glGenBuffers(1, &cell_cursors_);
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, cell_cursors_);
-    glBufferData(GL_SHADER_STORAGE_BUFFER, NUM_CELLS * sizeof(GLuint), nullptr, GL_DYNAMIC_DRAW);
+    glBufferData(GL_SHADER_STORAGE_BUFFER, res_.num_cells * sizeof(GLuint), nullptr, GL_DYNAMIC_DRAW);
 
     glGenBuffers(1, &sorted_indices_);
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, sorted_indices_);
@@ -197,6 +197,11 @@ void Simulation::set_periodic_x(float_t period) {
         s->use();
         s->set_float("u_period_x", period);
     }
+}
+
+void Simulation::set_wall_slip(glm::vec2 slip) {
+    force_.use();
+    force_.set_vec2("u_wall_slip", slip);
 }
 
 void Simulation::spawn_solids(const std::vector<glm::vec2>& positions) {
@@ -363,7 +368,7 @@ void Simulation::create_particles(float_t rest_density) {
     // equilibrium. Buffers are fixed at count_, so stop there.
     const int32_t per_row =
         static_cast<int32_t>(std::ceil(std::sqrt(static_cast<float_t>(count_))));
-    const float_t spacing = std::sqrt(MASS / rest_density);
+    const float_t spacing = std::sqrt(res_.mass / rest_density);
     const float_t offset = (per_row - 1) * spacing * 0.5f;
 
     for (int32_t row = 0; row < per_row && positions.size() < count_; ++row) {
@@ -375,18 +380,18 @@ void Simulation::create_particles(float_t rest_density) {
     upload_state(positions);
 }
 
-void Simulation::spawn_dam_break(float_t rest_density, float_t aspect) {
-    create_column(rest_density, aspect);
+void Simulation::spawn_dam_break(float_t rest_density) {
+    create_column(rest_density);
     debug_density_stats(rest_density);
 }
 
 // Dam break reservoir: a column of aspect ratio (rows/cols) against the left
 // wall, at the same rest-density pitch as the block spawn.
-void Simulation::create_column(float_t rest_density, float_t aspect) {
+void Simulation::create_column(float_t rest_density) {
     std::vector<glm::vec2> positions;
     positions.reserve(count_);
 
-    const float_t spacing = std::sqrt(MASS / rest_density);
+    const float_t spacing = std::sqrt(res_.mass / rest_density);
 
     // cols*rows = count_ with rows/cols = aspect. Height is clamped to the
     // domain first and the width re-derived, so nothing spawns out of bounds.
@@ -394,7 +399,7 @@ void Simulation::create_column(float_t rest_density, float_t aspect) {
         static_cast<int32_t>((DOMAIN_MAX - DOMAIN_MIN - 2.0f * EPS) / spacing);
 
     int32_t cols = std::max(1, static_cast<int32_t>(std::floor(
-                                   std::sqrt(static_cast<float_t>(count_) / aspect))));
+                                   std::sqrt(static_cast<float_t>(count_) / res_.aspect))));
     int32_t rows = static_cast<int32_t>(std::ceil(static_cast<float_t>(count_) / cols));
 
     if (rows > max_rows) {
@@ -470,13 +475,13 @@ void Simulation::set_static_uniforms() {
         s->use();  // uniforms go to the *currently bound* program
         s->set_uint("u_num_particles", count_);
         s->set_vec2("u_grid_origin", origin);
-        s->set_float("u_cell_size", CELL_SIZE);
-        s->set_int("u_grid_w", GRID_W);
-        s->set_int("u_grid_h", GRID_H);
+        s->set_float("u_cell_size", res_.cell_size);
+        s->set_int("u_grid_w", res_.grid_w);
+        s->set_int("u_grid_h", res_.grid_h);
     }
 
     scan_.use();
-    scan_.set_int("u_num_cells", NUM_CELLS);
+    scan_.set_int("u_num_cells", res_.num_cells);
 
     midpoint_.use();
     midpoint_.set_uint("u_num_particles", count_);
@@ -487,13 +492,13 @@ void Simulation::set_static_uniforms() {
     // Domain bounds reach density/force too: both build the wall images.
     for (gl::Shader* s : {&density_, &force_}) {
         s->use();
-        s->set_float("u_kernel_radius", KERNEL_RADIUS);
-        s->set_float("u_kernel_radius_sq", KERNEL_RADIUS_SQ);
-        s->set_float("u_mass", MASS);
+        s->set_float("u_kernel_radius", res_.kernel_radius);
+        s->set_float("u_kernel_radius_sq", res_.kernel_radius_sq);
+        s->set_float("u_mass", res_.mass);
         s->set_float("u_domain_half_x", DOMAIN_HALF_X);
         s->set_float("u_domain_min", DOMAIN_MIN);
         s->set_float("u_domain_max", DOMAIN_MAX);
-        s->set_float("u_wall_offset", WALL_OFFSET);
+        s->set_float("u_wall_offset", res_.wall_offset);
     }
 
     for (gl::Shader* s : {&density_, &force_}) {

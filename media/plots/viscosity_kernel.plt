@@ -34,8 +34,9 @@ set zeroaxis lt -1
 set samples 400
 set key top right
 
-# Line style: solid = kernel, dashed = first derivative, dotted = Laplacian.
-plot [-h*1.1:h*1.1] \
-     visc_lap(x) title "lap W (velocity smoothing weight)" with lines lw 2 dt 3 lc rgb "purple"
+# Line style: solid = the curve this figure is about; dashed and dotted
+# mark successive derivatives of it.
+plot [-h:h] \
+     visc_lap(x) title "lap W (velocity smoothing weight)" with lines lw 2 lc rgb "purple"
 
 if (exists("out")) { unset output }

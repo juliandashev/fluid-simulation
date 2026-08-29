@@ -10,6 +10,7 @@ uniform float u_aspect;   // window width / height; corrects x for non-square wi
 uniform int   u_color_field;  // 0 = speed, 1 = pressure
 uniform float u_target_density;
 uniform float u_pressure_multiplier;
+uniform float u_min_pressure;
 uniform float u_max_pressure;
 
 out float v_t;  // position in the colour ramp, 0 = blue, 1 = red
@@ -26,7 +27,8 @@ float pressure_of(float density) {
 }
 
 float pressure_t(float density) {
-    float t = clamp(pressure_of(density) / u_max_pressure, 0.0, 1.0);
+    float span = max(u_max_pressure - u_min_pressure, 1e-6);
+    float t = clamp((pressure_of(density) - u_min_pressure) / span, 0.0, 1.0);
     return sqrt(t);   // exponent < 1 opens up the low end, where a Bernoulli drop lives
 }
 

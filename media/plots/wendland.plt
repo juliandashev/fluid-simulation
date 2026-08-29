@@ -39,8 +39,9 @@ set zeroaxis lt -1
 set samples 400
 set key top right
 
-# Line style: solid = kernel, dashed = first derivative, dotted = Laplacian.
-plot [-h*1.1:h*1.1] \
+# Line style: solid = the curve this figure is about; dashed and dotted
+# mark successive derivatives of it.
+plot [-h:h] \
      wendland(x)       title "W (density)"            with lines lw 2 lc rgb "blue", \
      wendland_deriv(x) title "dW/dd (pressure slope)" with lines lw 2 dt 2 lc rgb "red"
 

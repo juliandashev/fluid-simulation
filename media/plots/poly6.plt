@@ -49,9 +49,10 @@ set key bottom right
 set arrow from  h/sqrt(3.0), graph 0 to  h/sqrt(3.0), graph 1 nohead dt 2 lc rgb "grey40"
 set arrow from -h/sqrt(3.0), graph 0 to -h/sqrt(3.0), graph 1 nohead dt 2 lc rgb "grey40"
 
-# Line style: solid = kernel, dashed = first derivative, dotted = Laplacian.
-plot [-h*1.1:h*1.1] \
-     poly6_coeff(x) title "coefficient (even)"       with lines lw 2 dt 2 lc rgb "orange" axes x1y1, \
+# Line style: solid = the curve this figure is about; dashed and dotted
+# mark successive derivatives of it.
+plot [-h:h] \
+     poly6_coeff(x) title "coefficient (even)"       with lines lw 2 lc rgb "orange" axes x1y1, \
      poly6_grad(x)  title "gradient magnitude (odd)" with lines lw 2 dt 2 lc rgb "red"    axes x1y1, \
      poly6_lap(x)   title "Laplacian (curvature)"    with lines lw 2 dt 3 lc rgb "blue"   axes x1y2
 

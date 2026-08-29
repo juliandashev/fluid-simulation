@@ -124,7 +124,8 @@ void Renderer::render(GLuint position_buffer, GLuint field_buffer, ColorField fi
     shader_.set_int("u_color_field", static_cast<int32_t>(field));
     shader_.set_float("u_target_density", params.target_density);
     shader_.set_float("u_pressure_multiplier", params.pressure_multiplier);
-    shader_.set_float("u_max_pressure", PRESSURE_COLOR_MAX);
+    shader_.set_float("u_min_pressure", params.pressure_min);
+    shader_.set_float("u_max_pressure", params.pressure_max);
 
     glBindVertexArray(vao_);
     glDrawArrays(GL_POINTS, 0, static_cast<GLsizei>(count));

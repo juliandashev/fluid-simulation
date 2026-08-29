@@ -30,8 +30,9 @@ struct Duct {
     float_t x1;
 };
 
-inline Duct pipe_duct() {
-    return {obstacle::pipe_floor, obstacle::pipe_ceiling, -0.5f * PERIOD_X, 0.5f * PERIOD_X};
+inline Duct pipe_duct(const Resolution& r) {
+    return {obstacle::pipe_floor, obstacle::pipe_ceiling,
+            -0.5f * r.period_x, 0.5f * r.period_x};
 }
 
 // Bernoulli is a statement about one streamline. A cross-section average mixes

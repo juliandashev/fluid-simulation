@@ -5,29 +5,23 @@
 
 namespace fluid {
 
-// Resolution. Every length and mass below derives from this, so refining the
-// whole simulation is one integer; n_x = 44 is the historical setting.
+// Resolution defaults. n_x = 44 with a = 46.38 is the historical setting the
+// dam-break numbers were measured at; a scene may pick its own - see Resolution.
 constexpr int32_t PARTICLES_ACROSS = 44;  // n_x, particles across the column
 constexpr float_t COLUMN_WIDTH = 46.38f;  // a, held fixed under refinement
 constexpr float_t DAM_ASPECT = 2.5f;      // n = height/width of the initial column
 
-constexpr float_t TARGET_DENSITY = 0.9f;                                        // rho_0
-constexpr float_t PARTICLE_SPACING = COLUMN_WIDTH / PARTICLES_ACROSS;           // dx
-constexpr float_t MASS = TARGET_DENSITY * PARTICLE_SPACING * PARTICLE_SPACING;  // m = rho_0*dx^2
+constexpr float_t TARGET_DENSITY = 0.9f;  // rho_0
 
 // h/dx, held fixed under refinement so the neighbour count stays constant.
-constexpr float_t KERNEL_RATIO = 3.79f;                             // ~45 neighbours in 2D
-constexpr float_t KERNEL_RADIUS = KERNEL_RATIO * PARTICLE_SPACING;  // h
-constexpr float_t KERNEL_RADIUS_SQ = KERNEL_RADIUS * KERNEL_RADIUS;
+constexpr float_t KERNEL_RATIO = 3.79f;  // ~45 neighbours in 2D
 
-// Scene
-constexpr int32_t COLUMN_ROWS = static_cast<int32_t>(PARTICLES_ACROSS * DAM_ASPECT);
-constexpr uint32_t NUM_PARTICLES = static_cast<uint32_t>(PARTICLES_ACROSS * COLUMN_ROWS);
 constexpr uint32_t MAX_HISTORY = 300;  // ~21 MB ceiling at 72 KB/snapshot
 
 // Rendering
 constexpr float_t PARTICLE_DRAW_SIZE = 1.0f;
 constexpr float_t SPEED_COLOR_MAX = 15.0f;        // speed that maps to full red
+constexpr float_t PRESSURE_COLOR_MIN = 0.0f;      // pressure that maps to full blue
 constexpr float_t PRESSURE_COLOR_MAX = 1'000.0f;  // pressure that maps to full red
 constexpr float_t INTERACTION_STRENGTH = 100.0f;  // mouse force
 constexpr float_t INTERACTION_RADIUS = 30.0f;
@@ -39,9 +33,6 @@ constexpr float_t GRAVITY = -9.81f;
 constexpr float_t SURFACE_TENSION = 0.0f;            // color-field detection threshold
 constexpr float_t SURFACE_TENSION_STRENGTH = 20.0f;  // 0 = off
 constexpr float_t COHESION_STRENGTH = 6.0f;          // Akinci pairwise cohesion
-
-// Mirror plane offset outside each face.
-constexpr float_t WALL_OFFSET = 0.25f * PARTICLE_SPACING;
 
 // Tangential velocity an image keeps: 1 = free-slip, 0 = no-slip.
 constexpr float_t WALL_SLIP_FLOOR = 0.0f;  // sliding along the floor/ceiling
@@ -70,15 +61,55 @@ constexpr float_t EPS = 1.0f;                                  // boundary epsil
 // column of width a and height n*a released against the left wall at t=0.
 //   ./fluid_simulation --experiment dam-break
 
-// Spatial grid. CELL_SIZE = h is what guarantees a 3x3 walk covers every neighbour.
-constexpr float_t CELL_SIZE = KERNEL_RADIUS;
-constexpr int32_t GRID_W = static_cast<int32_t>(2.0f * DOMAIN_HALF_X / CELL_SIZE) + 1;       // ~54
-constexpr int32_t GRID_H = static_cast<int32_t>((DOMAIN_MAX - DOMAIN_MIN) / CELL_SIZE) + 1;  // ~31
-constexpr int32_t NUM_CELLS = GRID_W * GRID_H;  // ~1674
+// Everything that scales with the discretisation, derived from one integer and
+// one length so the pieces cannot drift apart. A scene declares its own; the
+// shaders already take all of these as uniforms.
+struct Resolution {
+    int32_t particles_across;
+    float_t column_width;
+    float_t aspect;
 
-// Wrap width for periodic-x scenes. The grid must tile it exactly, or a
-// neighbour carried across the seam lands at the wrong offset.
-constexpr float_t PERIOD_X = GRID_W * CELL_SIZE;
+    uint32_t count;
+    float_t spacing;           // dx
+    float_t mass;              // m = rho_0 * dx^2
+    float_t kernel_radius;     // h
+    float_t kernel_radius_sq;
+    float_t wall_offset;       // mirror plane offset outside each face
+    float_t cell_size;         // = h, so a 3x3 walk covers every neighbour
+    int32_t grid_w;
+    int32_t grid_h;
+    int32_t num_cells;
+    float_t period_x;          // wrap width; the grid must tile it exactly
+    float_t fluid_volume;      // count * dx^2, the area the fluid fills at rho_0
+};
+
+constexpr Resolution make_resolution(int32_t n_x, float_t column_width, float_t aspect) {
+    const float_t dx = column_width / n_x;
+    const float_t h = KERNEL_RATIO * dx;
+    const int32_t rows = static_cast<int32_t>(n_x * aspect);
+    const uint32_t count = static_cast<uint32_t>(n_x * rows);
+    const int32_t gw = static_cast<int32_t>(2.0f * DOMAIN_HALF_X / h) + 1;
+    const int32_t gh = static_cast<int32_t>((DOMAIN_MAX - DOMAIN_MIN) / h) + 1;
+
+    return Resolution{n_x,
+                      column_width,
+                      aspect,
+                      count,
+                      dx,
+                      TARGET_DENSITY * dx * dx,
+                      h,
+                      h * h,
+                      0.25f * dx,
+                      h,
+                      gw,
+                      gh,
+                      gw * gh,
+                      gw * h,
+                      count * dx * dx};
+}
+
+constexpr Resolution DEFAULT_RESOLUTION =
+    make_resolution(PARTICLES_ACROSS, COLUMN_WIDTH, DAM_ASPECT);
 
 // Runtime-tunable copy of the force parameters, defaulting to the values above.
 struct SimParams {
@@ -92,7 +123,11 @@ struct SimParams {
     float_t tension_strength = SURFACE_TENSION_STRENGTH;
     float_t cohesion_strength = COHESION_STRENGTH;
     float_t body_accel_x = 0.0f;  // drives the periodic channel; zero elsewhere
+    float_t target_speed = 0.0f;  // 0 = constant drive; else the drive eases off here
+    float_t wing_aoa_deg = 8.0f;  // rebuilt when changed; wing scene only
     float_t draw_scale = 1.0f;    // dot size as a fraction of the lattice pitch
+    float_t pressure_min = PRESSURE_COLOR_MIN;  // narrow the band to see small
+    float_t pressure_max = PRESSURE_COLOR_MAX;  // deviations around ambient
 };
 
 }  // namespace fluid

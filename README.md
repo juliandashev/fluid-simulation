@@ -118,13 +118,36 @@ compressibility limit showing up where the theory says it should. Velocity
 recovers fully downstream of the throat while pressure does not - that asymmetry
 is the viscous loss, and in ideal flow both would be symmetric.
 
+`--experiment wing` is the same machinery without a duct: a NACA 0018 section in
+a gas filling the whole domain, periodic in x and driven by a body force with a
+governor, since free-slip domain walls leave nothing to balance a constant drive.
+The angle of attack is a panel field - moving it rebuilds the section, its
+boundary particles and their grid in place, without disturbing the flow. It is a
+demonstration rather than a result: at accessible resolutions the smoothing
+length is comparable to the section thickness, so there is no trailing edge sharp
+enough to set the Kutta condition, and without circulation there is no lift to
+measure. A sweep at n_x = 50 put the mean pressure above and below the section
+within 0.3% of each other. What it does show is bluff-body behaviour once the
+angle is large - a stagnation region on the windward face and a separated
+low-pressure wake - which needs no circulation and is visible at any resolution.
+
+**Resolution.** Every length and mass derives from one integer and one length,
+built into a `Resolution` at startup rather than fixed at compile time, so a
+scene can pick its own and `--particles N` overrides it. The dam-break scenes
+keep the historical setting and reproduce bit-identically; the wing needs a
+domain-filling gas, which is a different rest volume and therefore a different
+`COLUMN_WIDTH`. Holding `h/dx` fixed keeps the neighbour count constant under
+refinement, so `--particles 22/44/88` changes the discretisation without changing
+the physical problem.
+
 **Interaction & tooling.** Drag with the mouse to push or pull the fluid,
 pause and step/rewind through a GPU-resident history buffer, and tune the
 physics live - gravity, pressure, rest density, viscosity, tension,
 cohesion, timestep, and time scale - through a Dear ImGui panel. `P` switches
 the particle colouring between speed and pressure; the pressure view reads the
 same Tait EOS the solver runs on, so the field driving the motion is visible
-rather than only its result.
+rather than only its result. Its range is a pair of panel fields: a wing perturbs
+the pressure by a few percent of ambient, which a full-scale ramp hides entirely.
 
 ### Working on now
 
@@ -133,9 +156,12 @@ command line (`--experiment`, `--help` lists them), and solid geometry inside th
 domain is built from boundary particles, so a scene is a set of quads plus a
 table row. That gave the periodic pipe above, which is the first result that is
 not a benchmark reproduction: a textbook law recovered from a solver that was
-never told about it. Next is either a runtime particle count - the last
-compile-time constant blocking a convergence study - or XSPH, to suppress the
-particle layering the pressure view makes visible.
+never told about it. The runtime particle count that was blocking a convergence
+study is done, so that study is now a matter of running it. The wing is the
+open end: it needs enough resolution to carry circulation, and a force
+accumulator on the boundary particles before lift is a number rather than a
+picture. XSPH would separately suppress the particle layering the pressure view
+makes visible.
 
 Underneath that, quantitative validation rather than new physics. The dam break
 gives a curve with a known shape to compare against, which turns "it looks like
@@ -327,7 +353,7 @@ include/
   input.hpp        - keyboard/mouse polling helpers
   dam_break.hpp    - surge-front criterion + benchmark logging
   experiment.hpp   - the scene enum and its table
-  obstacle.hpp     - solid geometry as convex quads, per scene
+  obstacle.hpp     - solid geometry as convex quads and polygons, per scene
   profile.hpp      - x-binned duct profiling for the pipe
   (+ headers for the .cc files above)
 shaders/
@@ -356,8 +382,9 @@ Each acceleration evaluation dispatches, in order:
    scatter), giving each cell a contiguous slice of particle indices.
 2. **Density** - Wendland C2 kernel gathered in one 3×3 cell walk, plus the
    mirror images of every neighbour when the particle is within `h` of a wall.
-3. **Forces** - one fused neighbour loop accumulates pressure (spiky
-   gradient), Müller Laplacian viscosity, pairwise cohesion, and the same
+3. **Forces** - one fused neighbour loop accumulates pressure (the same
+   Wendland C2 derivative, so the gradient belongs to the density it acts
+   on), Müller Laplacian viscosity, pairwise cohesion, and the same
    wall images as the density pass. Pressure comes from the Tait equation of
    state `p = k((ρ/ρ₀)⁴ − 1)`, clamped to ≥ 0.
 
@@ -380,8 +407,8 @@ Both fill the same hole - the kernel support a wall truncates - but a mirror
 image is an affine transform of a neighbour already fetched into a register,
 whereas a boundary particle is a separate memory read, and bandwidth is the
 scarce resource here. Filling the truncated region properly needs a band of
-thickness `h`, roughly four rows at the stock resolution, which for this tank
-is ~2300 particles against 4840 of fluid; they would also be sorted and walked
+thickness `h`, roughly four rows, which for this tank is ~2300 particles
+against 4840 of fluid; they would also be sorted and walked
 every frame across the whole perimeter, while mirrors cost nothing where no
 fluid touches a wall. A reflected image additionally inherits the fluid's own
 density and disorder, so counter-pressure rises automatically under compression

@@ -14,7 +14,7 @@ namespace fluid {
 // compute shader that advances it. Requires a current GL context
 class Simulation {
 public:
-    explicit Simulation(uint32_t count);
+    explicit Simulation(const Resolution& res);
     ~Simulation();
 
     Simulation(const Simulation&) = delete;
@@ -23,9 +23,11 @@ public:
     void step(float_t delta_time, const SimParams& params);
     void spawn_particles(bool is_random, float_t rest_density = TARGET_DENSITY);
 
+    const Resolution& resolution() const { return res_; }
+
     // Dam break initial condition: a column of aspect ratio (height/width)
     // resting against the left wall on the floor, at the rest-density pitch.
-    void spawn_dam_break(float_t rest_density = TARGET_DENSITY, float_t aspect = DAM_ASPECT);
+    void spawn_dam_break(float_t rest_density = TARGET_DENSITY);
 
     // Static solid geometry. Contributes to density and pressure but never
     // moves, so the grid over it is built here once instead of every step.
@@ -36,6 +38,9 @@ public:
 
     // period > 0 replaces the side walls with a wrap of that width.
     void set_periodic_x(float_t period);
+
+    // 1 = free-slip, 0 = no-slip; x is the floor/ceiling, y the side walls.
+    void set_wall_slip(glm::vec2 slip);
 
     // Geometry of the last spawned dam column - the reference length the
     // benchmark nondimensionalises against.
@@ -82,7 +87,7 @@ public:
 private:
     void create_particles(float_t rest_density);  // centered square block
     void create_particles(uint32_t seed);         // uniform random scatter
-    void create_column(float_t rest_density, float_t aspect);  // dam break reservoir
+    void create_column(float_t rest_density);  // dam break reservoir
     void upload_state(const std::vector<glm::vec2>& positions);
     void set_static_uniforms();
     void build_solid_grid();
@@ -119,6 +124,7 @@ private:
     GLuint cell_cursors_ = 0;
     GLuint sorted_indices_ = 0;
 
+    Resolution res_;
     uint32_t count_ = 0;
     uint32_t solid_count_ = 0;
     float_t period_x_ = 0.0f;

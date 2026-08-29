@@ -36,8 +36,9 @@ set key top right
 set arrow from -h/2,0 to -h/2,0.0625 nohead dt 2 lc rgb "gray"
 set arrow from  h/2,0 to  h/2,0.0625 nohead dt 2 lc rgb "gray"
 
-# Line style: solid = kernel, dashed = first derivative, dotted = Laplacian.
-plot [-h*1.1:h*1.1] \
+# Line style: solid = the curve this figure is about; dashed and dotted
+# mark successive derivatives of it.
+plot [-h:h] \
      cohesion(x) title "C (peaks at h/2, zero at contact)" with lines lw 2 lc rgb "dark-green"
 
 if (exists("out")) { unset output }

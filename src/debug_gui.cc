@@ -47,6 +47,8 @@ void clamp_params(SimParams& params) {
     params.cohesion_strength = std::max(params.cohesion_strength, 0.0f);
     params.time_scale = std::max(params.time_scale, 0.0f);
     params.draw_scale = std::clamp(params.draw_scale, 0.1f, 4.0f);
+    params.target_speed = std::max(params.target_speed, 0.0f);
+    params.wing_aoa_deg = std::clamp(params.wing_aoa_deg, -60.0f, 60.0f);
     // gravity is deliberately unclamped: negative is its normal state.
 }
 
@@ -66,7 +68,11 @@ void DebugGui::draw_params(SimParams& params) {
     ImGui::InputFloat("tension strength", &params.tension_strength, 0.1f, 0.5f, "%.2f");
     ImGui::InputFloat("cohesion", &params.cohesion_strength, 5.0f, 25.0f, "%.1f");
     ImGui::InputFloat("body force x", &params.body_accel_x, 1.0f, 5.0f, "%.2f");
+    ImGui::InputFloat("target speed", &params.target_speed, 1.0f, 5.0f, "%.1f");
+    ImGui::InputFloat("wing angle", &params.wing_aoa_deg, 1.0f, 5.0f, "%.1f");
     ImGui::InputFloat("particle size", &params.draw_scale, 0.05f, 0.2f, "%.2f");
+    ImGui::InputFloat("pressure min", &params.pressure_min, 25.0f, 100.0f, "%.0f");
+    ImGui::InputFloat("pressure max", &params.pressure_max, 25.0f, 100.0f, "%.0f");
 
     if (ImGui::Button("Reset to defaults")) {
         params = SimParams{};

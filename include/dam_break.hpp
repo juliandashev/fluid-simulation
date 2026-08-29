@@ -23,9 +23,9 @@ namespace dam_break {
 
 // Surge front position (world x), gated to the bed and de-spiked by quantile.
 // Reports particle-centre x, so a t=0 column reads Z = 0.978, not 1.0.
-inline float_t surge_front(const std::vector<glm::vec2>& positions,
+inline float_t surge_front(const std::vector<glm::vec2>& positions, const Resolution& r,
                            float_t fallback = -DOMAIN_HALF_X) {
-    constexpr float_t FRONT_BAND = KERNEL_RADIUS;  // "along the bed" = within h of the floor
+    const float_t FRONT_BAND = r.kernel_radius;  // "along the bed" = within h of the floor
     constexpr float_t FRONT_QUANTILE = 0.01f;      // leading fraction discarded as spray
 
     std::vector<float_t> xs;
