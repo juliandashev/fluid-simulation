@@ -17,6 +17,8 @@
 #include "simulation.hpp"
 #include "logger.hpp"
 #include "obstacle.hpp"
+#include "pipe.hpp"
+#include "wing.hpp"
 #include "profile.hpp"
 
 namespace fluid {
@@ -98,7 +100,7 @@ int main(int argc, char** argv) {
         log::Logger logger("run.csv");
         dam_break::Logger dam_logger(dam_break::filename(params));
         profile::Logger profile_logger(profile::filename(scene.name, params),
-                                       profile::pipe_duct(res));
+                                       pipe::duct(res));
 
         std::vector<obstacle::Quad> obstacles;
         float_t built_aoa = 0.0f;
@@ -110,15 +112,15 @@ int main(int argc, char** argv) {
 
             switch (experiment) {
             case Experiment::DamBreakObstacle:
-                obstacles = obstacle::dam_break_block(res);
+                obstacles = dam_break::block(res);
                 break;
             case Experiment::Pipe:
-                obstacles = obstacle::pipe(res);
+                obstacles = pipe::geometry(res);
                 break;
             case Experiment::Wing: {
                 // Filled as one polygon; a fan of quads would double up
                 // particles along every shared edge.
-                const obstacle::Poly w = obstacle::wing(params.wing_aoa_deg);
+                const obstacle::Poly w = wing::section(params.wing_aoa_deg);
                 obstacles = obstacle::to_quads(w);
                 solids = obstacle::to_particles(w, res);
                 break;
@@ -153,9 +155,7 @@ int main(int argc, char** argv) {
                                                    glm::vec2(x, DOMAIN_MAX - EPS),
                                                    solid_particles, sim.count(), res));
 
-                const float_t thickness =
-                    obstacle::WING_THICKNESS_RATIO * obstacle::WING_CHORD_FRAC *
-                    (DOMAIN_MAX - DOMAIN_MIN);
+                const float_t thickness = wing::thickness();
 
                 std::cout << "  c = " << sound_speed(params) << "; Mach 0.1 is "
                           << 0.1f * sound_speed(params) << "\n"
@@ -169,7 +169,7 @@ int main(int argc, char** argv) {
                 break;
             }
             case Experiment::Pipe: {
-                const float_t h = obstacle::PIPE_HALF_HEIGHT;
+                const float_t h = pipe::HALF_HEIGHT;
                 const float_t x = 0.5f * res.period_x;
 
                 sim.set_periodic_x(res.period_x);

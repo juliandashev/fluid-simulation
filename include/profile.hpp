@@ -12,7 +12,6 @@
 
 #include "defs.hpp"
 #include "eos.hpp"
-#include "obstacle.hpp"
 
 namespace fluid {
 namespace profile {
@@ -29,11 +28,6 @@ struct Duct {
     float_t x0;
     float_t x1;
 };
-
-inline Duct pipe_duct(const Resolution& r) {
-    return {obstacle::pipe_floor, obstacle::pipe_ceiling,
-            -0.5f * r.period_x, 0.5f * r.period_x};
-}
 
 // Bernoulli is a statement about one streamline. A cross-section average mixes
 // core flow with the free surface, so the core band is logged alongside it.

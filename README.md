@@ -351,10 +351,12 @@ include/
   simulation.hpp   - Simulation class interface
   history.hpp      - GPU-resident ring buffer of past states for rewind
   input.hpp        - keyboard/mouse polling helpers
-  dam_break.hpp    - surge-front criterion + benchmark logging
   experiment.hpp   - the scene enum and its table
-  obstacle.hpp     - solid geometry as convex quads and polygons, per scene
-  profile.hpp      - x-binned duct profiling for the pipe
+  obstacle.hpp     - geometry primitives: quads, polygons, lattice filling
+  dam_break.hpp    - surge-front criterion, benchmark logging, the bed block
+  pipe.hpp         - periodic channel with a throat, and its duct profile
+  wing.hpp         - NACA 00xx section, sized as a fraction of the domain
+  profile.hpp      - x-binned duct profiling, over any Duct
   (+ headers for the .cc files above)
 shaders/
   count.comp       - counting sort 1/3: histogram of particles per cell

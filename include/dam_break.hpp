@@ -14,6 +14,7 @@
 #include <functional>
 
 #include "defs.hpp"
+#include "obstacle.hpp"
 
 namespace fluid {
 namespace dam_break {
@@ -45,6 +46,13 @@ inline float_t surge_front(const std::vector<glm::vec2>& positions, const Resolu
     const std::size_t k = static_cast<std::size_t>(FRONT_QUANTILE * xs.size());
     std::nth_element(xs.begin(), xs.begin() + k, xs.end(), std::greater<float_t>());
     return xs[k];
+}
+
+// Block on the bed downstream of the column (Koshizuka & Oka 1996).
+inline std::vector<obstacle::Quad> block(const Resolution& r) {
+    const float_t w = r.column_width / 4.0f;
+    const float_t h = 0.75f * r.column_width;
+    return {obstacle::box(glm::vec2(-0.5f * w, DOMAIN_MIN), glm::vec2(0.5f * w, DOMAIN_MIN + h))};
 }
 
 inline float_t Z(float_t front_x, float_t origin_x, float_t a) {
