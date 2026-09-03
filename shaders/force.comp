@@ -16,6 +16,7 @@ uniform float u_cohesion_strength;
 uniform float u_interaction_strength;
 uniform vec2  u_interaction_point;
 uniform float u_interaction_radius;
+uniform vec2  u_blow_dir;  // unit vector; zero means the ordinary radial pull
 uniform vec2 u_wall_slip;  // per tangential axis; 1 = free-slip, 0 = no-slip
 uniform float u_solid_slip;  // same, for boundary particles
 
@@ -82,7 +83,11 @@ vec2 interaction_force(vec2 position,
         vec2 dir = dst <= 1e-6f ? vec2(0.0) : offset / dst;
         float falloff = 1.0 - (dst / radius);  // 1 at center; 0 at edge
 
-        force = (dir * strength - velocity) * falloff;
+        // Both forms drive velocity toward a target; the pull aims at the
+        // cursor, the blow aims along a fixed direction regardless of position.
+        vec2 aim = (u_blow_dir == vec2(0.0)) ? dir : u_blow_dir;
+
+        force = (aim * strength - velocity) * falloff;
     }
 
     return (strength == 0.0) ? vec2(0.0) : force;

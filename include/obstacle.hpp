@@ -2,6 +2,7 @@
 
 #include <glm/common.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <glm/vec2.hpp>
 #include <vector>
@@ -112,6 +113,40 @@ inline std::vector<glm::vec2> to_particles(const Poly& poly, const Resolution& r
         }
     }
 
+    // Where the shape is thinner than the spacing the lattice above lands
+    // nothing inside it - a sharp trailing edge ends up with no boundary
+    // particles at all, and the fluid pours through a wall that is not there.
+    // Walking the outline fills only what the lattice missed, so the packing
+    // stays exactly as it was wherever the fill already worked.
+    const float_t gap_sq = 0.8f * r.spacing * 0.8f * r.spacing;
+    const std::size_t corners = poly.p.size();
+
+    for (std::size_t i = 0; i < corners; ++i) {
+        const glm::vec2 a = poly.p[i];
+        const glm::vec2 edge = poly.p[(i + 1) % corners] - a;
+        const float_t len = std::sqrt(edge.x * edge.x + edge.y * edge.y);
+
+        // The next edge starts at this one's end, so stop short of it.
+        const int32_t steps = std::max(1, static_cast<int32_t>(len / r.spacing + 0.5f));
+
+        for (int32_t k = 0; k < steps; ++k) {
+            const glm::vec2 p = a + edge * (static_cast<float_t>(k) / steps);
+
+            bool covered = false;
+            for (const glm::vec2& q : out) {
+                const glm::vec2 d = q - p;
+                if (d.x * d.x + d.y * d.y < gap_sq) {
+                    covered = true;
+                    break;
+                }
+            }
+
+            if (!covered) {
+                out.push_back(p);
+            }
+        }
+    }
+
     return out;
 }
 
@@ -156,12 +191,86 @@ inline std::vector<glm::vec2> to_particles(const std::vector<Quad>& quads,
     return out;
 }
 
+namespace detail {
+
+// A uniform bucket grid over the solids, so the exclusion test below is a 3x3
+// cell walk instead of a scan of every solid. Same idea as the solver's
+// neighbour grid, minus the parallel counting sort the GPU needs.
+class SolidGrid {
+public:
+    SolidGrid(const std::vector<glm::vec2>& solids, float_t radius) : cell_(radius) {
+        if (solids.empty()) {
+            return;
+        }
+
+        glm::vec2 hi = solids[0];
+        lo_ = solids[0];
+        for (const glm::vec2& q : solids) {
+            lo_ = glm::min(lo_, q);
+            hi = glm::max(hi, q);
+        }
+
+        dim_ = glm::ivec2((hi - lo_) / cell_) + 1;
+        buckets_.resize(static_cast<std::size_t>(dim_.x) * dim_.y);
+
+        for (const glm::vec2& q : solids) {
+            buckets_[index(cell_of(q))].push_back(q);
+        }
+    }
+
+    // Cells are exactly the query radius across, so anything close enough to
+    // block is in the 3x3 around the point; a wider walk would be wasted.
+    bool blocked(glm::vec2 point, float_t radius_sq) const {
+        if (buckets_.empty()) {
+            return false;
+        }
+
+        const glm::ivec2 home = cell_of(point);
+
+        for (int32_t dy = -1; dy <= 1; ++dy) {
+            for (int32_t dx = -1; dx <= 1; ++dx) {
+                const glm::ivec2 c = home + glm::ivec2(dx, dy);
+
+                if (c.x < 0 || c.y < 0 || c.x >= dim_.x || c.y >= dim_.y) {
+                    continue;
+                }
+
+                for (const glm::vec2& q : buckets_[index(c)]) {
+                    const glm::vec2 d = q - point;
+                    if (d.x * d.x + d.y * d.y < radius_sq) {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        return false;
+    }
+
+private:
+    glm::ivec2 cell_of(glm::vec2 p) const { return glm::ivec2(glm::floor((p - lo_) / cell_)); }
+    std::size_t index(glm::ivec2 c) const {
+        return static_cast<std::size_t>(c.y) * dim_.x + c.x;
+    }
+
+    float_t cell_ = 0.0f;
+    glm::vec2 lo_{0.0f};
+    glm::ivec2 dim_{0};
+    std::vector<std::vector<glm::vec2>> buckets_;
+};
+
+}  // namespace detail
+
 // Lays n particles on the finest lattice that clears the solids. Starts at the
 // fluid pitch and tightens, because a pressurised channel packs tighter than dx.
 inline std::vector<glm::vec2> fill_region(glm::vec2 lo, glm::vec2 hi,
                                           const std::vector<glm::vec2>& solids, uint32_t n,
                                           const Resolution& r) {
-    const float_t margin_sq = 0.8f * r.spacing * 0.8f * r.spacing;
+    const float_t margin = 0.8f * r.spacing;
+    const float_t margin_sq = margin * margin;
+
+    // Built once: the solids do not move as the lattice tightens.
+    const detail::SolidGrid grid(solids, margin);
 
     for (float_t step = r.spacing; step > 0.5f * r.spacing; step *= 0.98f) {
         std::vector<glm::vec2> out;
@@ -171,16 +280,7 @@ inline std::vector<glm::vec2> fill_region(glm::vec2 lo, glm::vec2 hi,
             for (int32_t i = 0; i < c.x; ++i) {
                 const glm::vec2 p = lo + step * glm::vec2(i, j);
 
-                bool blocked = false;
-                for (const glm::vec2& q : solids) {
-                    const glm::vec2 d = q - p;
-                    if (d.x * d.x + d.y * d.y < margin_sq) {
-                        blocked = true;
-                        break;
-                    }
-                }
-
-                if (!blocked) {
+                if (!grid.blocked(p, margin_sq)) {
                     out.push_back(p);
                 }
             }

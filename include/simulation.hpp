@@ -66,12 +66,14 @@ public:
     void dump_particles(const std::string& path, float_t gravity) const;
 
     // Max speed (x) and acceleration magnitude (y) of the last stepped frame.
-    [[nodiscard]] glm::vec2 max_kinematics();
+    [[nodiscard]] glm::vec3 max_kinematics();  // x: max speed, y: max accel, z: mean speed
     void debug_density_stats(float_t rest_density = TARGET_DENSITY);
 
-    void set_interaction(glm::vec2 point, float_t strength) {
+    void set_interaction(glm::vec2 point, float_t strength,
+                         glm::vec2 blow_dir = glm::vec2(0.0f)) {
         interaction_point_ = point;
         interaction_strength_ = strength;
+        blow_dir_ = blow_dir;
     }
 
     GLuint position_buffer() const { return position_ssbo_; }
@@ -81,6 +83,11 @@ public:
     GLuint density_buffer() const { return density_ssbo_; }
     GLuint velocity_buffer() const { return velocity_ssbo_; }
     GLuint solid_position_buffer() const { return solid_position_ssbo_; }
+    // The neighbour grid, for a reader that samples the field off-particle.
+    GLuint cell_counts_buffer() const { return cell_counts_; }
+    GLuint cell_starts_buffer() const { return cell_starts_; }
+    GLuint sorted_indices_buffer() const { return sorted_indices_; }
+    float_t period_x() const { return period_x_; }  // 0 unless the scene turned wrapping on
     uint32_t count() const { return count_; }
     uint32_t solid_count() const { return solid_count_; }
 
@@ -112,7 +119,7 @@ private:
     GLuint mid_position_ssbo_ = 0;
     GLuint mid_velocity_ssbo_ = 0;
 
-    GLuint max_kinematics_ssbo_ = 0;  // two uints: float maxima as bit patterns
+    GLuint max_kinematics_ssbo_ = 0;  // maxima as bit patterns + a fixed-point speed sum
 
     GLuint solid_position_ssbo_ = 0;
     GLuint solid_cell_counts_ = 0;
@@ -133,6 +140,7 @@ private:
     float_t column_height_ = 0.0f;    // n*a as realised, after the row clamp
     float_t column_origin_x_ = 0.0f;  // left face of the column at t=0
 
+    glm::vec2 blow_dir_{0.0f};
     glm::vec2 interaction_point_{0.0f};
     float_t interaction_strength_ = 0.0f;
 };

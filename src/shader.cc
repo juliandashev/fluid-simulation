@@ -112,8 +112,8 @@ Shader::Shader(const std::string& compute_path) {
 }
 
 Shader::Shader(const std::string& vert_path, const std::string& frag_path) {
-    GLuint vert = compile(GL_VERTEX_SHADER, with_defines(read_file(vert_path)));
-    GLuint frag = compile(GL_FRAGMENT_SHADER, with_defines(read_file(frag_path)));
+    GLuint vert = compile(GL_VERTEX_SHADER, resolve_includes(with_defines(read_file(vert_path))));
+    GLuint frag = compile(GL_FRAGMENT_SHADER, resolve_includes(with_defines(read_file(frag_path))));
 
     id_ = glCreateProgram();
     glAttachShader(id_, vert);
@@ -163,6 +163,10 @@ void Shader::set_mat4(const char* name, const glm::mat4& m) const {
 
 void Shader::set_int(const char* name, int value) const {
     glUniform1i(glGetUniformLocation(id_, name), value);
+}
+
+void Shader::set_ivec2(const char* name, int x, int y) const {
+    glUniform2i(glGetUniformLocation(id_, name), x, y);
 }
 
 void Shader::set_vec2_array(const char* name, const glm::vec2* data, int count) const {

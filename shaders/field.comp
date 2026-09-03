@@ -1,0 +1,98 @@
+#version 430
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+#include "common.glsl"
+
+layout(std430, binding = 8) buffer Speeds { float speeds[]; };
+
+layout(rgba32f, binding = 0) uniform writeonly image2D u_field;
+
+uniform ivec2 u_field_size;
+uniform float u_render_radius;     // h_vis; independent of the solver's h
+uniform float u_render_radius_sq;
+uniform int   u_rings;             // cells to walk each way: ceil(h_vis / cell_size)
+uniform float u_target_density;
+uniform float u_pressure_multiplier;
+
+// Same Tait EOS as force.comp. Pressure is interpolated, not recomputed from an
+// interpolated density: the EOS is convex, so the two are not the same field.
+float pressure_of(float density) {
+    float ratio = density / u_target_density;
+    return max(0.0, u_pressure_multiplier * (pow(ratio, EOS_EXPONENT) - 1.0));
+}
+
+// Same Wendland C2 as the solver, evaluated at the render radius rather than h.
+float render_kernel(float distance) {
+    float q = distance / u_render_radius;
+    float one = 1.0 - q;
+
+    return (7.0 / (PI * u_render_radius * u_render_radius)) * one * one * one * one *
+           (4.0 * q + 1.0);
+}
+
+void main() {
+    ivec2 texel = ivec2(gl_GlobalInvocationID.xy);
+    if (texel.x >= u_field_size.x || texel.y >= u_field_size.y) {
+        return;
+    }
+
+    // Texel centres, mapped across the visible domain.
+    vec2 uv = (vec2(texel) + 0.5) / vec2(u_field_size);
+    vec2 point = vec2(mix(-u_domain_half_x, u_domain_half_x, uv.x),
+                      mix(u_domain_min, u_domain_max, uv.y));
+
+    float speed_sum = 0.0;
+    float pressure_sum = 0.0;
+    float weight_sum = 0.0;  // the Shepard denominator
+
+    ivec2 my_cell = ivec2(floor((point - u_grid_origin) / u_cell_size));
+
+    for (int dy = -u_rings; dy <= u_rings; ++dy) {
+        for (int dx = -u_rings; dx <= u_rings; ++dx) {
+            ivec2 cell = my_cell + ivec2(dx, dy);
+            float shift;
+
+            if (!resolve_cell(cell, shift)) {
+                continue;
+            }
+
+            uint ci = uint(cell.y * u_grid_w + cell.x);
+
+            uint start = cell_starts[ci];
+            uint end = start + cell_counts[ci];
+
+            for (uint k = start; k < end; ++k) {
+                uint j = sorted_indices[k];
+
+                vec2 offset = positions[j] + vec2(shift, 0.0) - point;
+                float distance_sq = dot(offset, offset);
+
+                if (distance_sq >= u_render_radius_sq) {
+                    continue;
+                }
+
+                float rho_j = densities[j].x;
+                if (rho_j <= 0.0) {
+                    continue;
+                }
+
+                float w = (u_mass / rho_j) * render_kernel(sqrt(distance_sq));
+
+                weight_sum += w;
+                speed_sum += w * speeds[j];
+                pressure_sum += w * pressure_of(rho_j);
+            }
+        }
+    }
+
+    // Shepard normalisation: without it the field droops wherever the kernel
+    // support is not filled, which would invent a low reading at every edge.
+    vec4 out_value = vec4(0.0);
+
+    if (weight_sum > 1e-6) {
+        out_value = vec4(speed_sum / weight_sum, pressure_sum / weight_sum, weight_sum, 1.0);
+    }
+
+    imageStore(u_field, texel, out_value);
+}

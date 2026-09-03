@@ -48,13 +48,29 @@ void configure(Experiment which, SimParams& params) {
         params.draw_scale = 0.55f;  // separated dots; the field reads as colour, not a smear
     }
 
+    if (which == Experiment::Pipe) {
+        // 3812 boundary particles put the per-step cost near dt/time_scale, so a
+        // higher scale buys no simulated time - it only pins MAX_SUBSTEPS. See README.
+        params.time_scale = 1.25f;
+
+        // Measured band: the core runs 419 at the throat to 691 in the wide
+        // section, and the default 0..1000 flattens that into two hues.
+        params.pressure_min = 400.0f;
+        params.pressure_max = 700.0f;
+    }
+
     if (which == Experiment::Wing) {
-        // The gas sits near p = 700; a full 0..1000 ramp would put the whole
-        // screen in one colour band and hide the few percent the wing produces.
-        params.pressure_min = 550.0f;
-        params.pressure_max = 850.0f;
-        params.body_accel_x = 6.0f;   // with a governor this only sets how fast it gets there
-        params.target_speed = 13.0f;  // ~Mach 0.15 on the fastest particle
+        // Wide, because the blow tool moves the gas across the whole range:
+        // undisturbed it sits at 700, a jet drops the region above the wing to
+        // 20-190 while the gas below rises to ~500. A band around ambient shows
+        // the quiet state nicely and clamps the entire blown field to blue.
+        params.pressure_min = 0.0f;
+        params.pressure_max = 800.0f;
+        // Starts still, so the blow tool (B) acts on quiet gas and its effect on
+        // the pressure field is readable. For the free-stream version instead,
+        // set body force x = 6 and target speed = 20 in the panel.
+        params.body_accel_x = 0.0f;
+        params.target_speed = 0.0f;
     }
 }
 

@@ -1,13 +1,13 @@
 #version 430 core
 
 layout(location = 0) in vec2 position;
-layout(location = 1) in float a_field;  // speed, or density when u_color_field = 1
+layout(location = 1) in float a_field;  // speed, or density in pressure mode
 
 uniform float u_point_size;
 uniform float u_domain_half;
 uniform float u_max_speed;
 uniform float u_aspect;   // window width / height; corrects x for non-square windows
-uniform int   u_color_field;  // 0 = speed, 1 = pressure
+uniform int   u_color_field;  // 0 = plain, 1 = speed, 2 = pressure
 uniform float u_target_density;
 uniform float u_pressure_multiplier;
 uniform float u_min_pressure;
@@ -35,5 +35,8 @@ float pressure_t(float density) {
 void main() {
     gl_Position = vec4(position.x / (u_domain_half * u_aspect), position.y / u_domain_half, 0.0, 1.0);
     gl_PointSize = u_point_size;
-    v_t = u_color_field == 0 ? speed_t(a_field) : pressure_t(a_field);
+    // 0 leaves every particle at the blue end of the ramp: plain fluid.
+    v_t = u_color_field == 1 ? speed_t(a_field)
+        : u_color_field == 2 ? pressure_t(a_field)
+                             : 0.0;
 }

@@ -56,7 +56,7 @@ Simulation::Simulation(const Resolution& res)
 
     glGenBuffers(1, &max_kinematics_ssbo_);
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, max_kinematics_ssbo_);
-    glBufferData(GL_SHADER_STORAGE_BUFFER, 2 * sizeof(GLuint), nullptr, GL_DYNAMIC_READ);
+    glBufferData(GL_SHADER_STORAGE_BUFFER, 3 * sizeof(GLuint), nullptr, GL_DYNAMIC_READ);
 
     // Solid geometry. Sized for real at spawn_solids(); one element keeps the
     // bindings legal while a scene has no obstacles.
@@ -138,6 +138,7 @@ void Simulation::step(float_t delta_time, const SimParams& params) {
     force_.set_float("u_viscosity", params.viscosity);
     force_.set_float("u_tension_threshold", params.tension_threshold);
     force_.set_vec2("u_interaction_point", interaction_point_);
+    force_.set_vec2("u_blow_dir", blow_dir_);
     force_.set_float("u_interaction_strength", interaction_strength_);
     force_.set_float("u_tension_strength", params.tension_strength);
     force_.set_float("u_cohesion_strength", params.cohesion_strength);
@@ -327,7 +328,7 @@ float_t decode_max_bits(GLuint bits) {
 
 // Once per rendered frame, not per substep. Values are one frame stale; the
 // CFL safety factors absorb that.
-glm::vec2 Simulation::max_kinematics() {
+glm::vec3 Simulation::max_kinematics() {
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, acceleration_ssbo_);
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 8, speed_ssbo_);
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 11, max_kinematics_ssbo_);
@@ -341,10 +342,12 @@ glm::vec2 Simulation::max_kinematics() {
     glDispatchCompute((count_ + 255) / 256, 1, 1);
     glMemoryBarrier(GL_BUFFER_UPDATE_BARRIER_BIT);  // atomics land before the readback
 
-    GLuint bits[2] = {0, 0};
+    GLuint bits[3] = {0, 0, 0};
     glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, sizeof(bits), bits);
 
-    return glm::vec2(decode_max_bits(bits[0]), decode_max_bits(bits[1]));
+    const float_t mean = count_ > 0 ? bits[2] / (100.0f * count_) : 0.0f;
+
+    return glm::vec3(decode_max_bits(bits[0]), decode_max_bits(bits[1]), mean);
 }
 
 void Simulation::spawn_particles(bool is_random, float_t rest_density) {

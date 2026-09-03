@@ -13,9 +13,14 @@ layout(std430, binding = 8) buffer Speeds {
 layout(std430, binding = 11) buffer MaxKinematics {
     uint max_speed_bits;
     uint max_accel_bits;
+    uint speed_sum_fixed;  // sum of speeds x SPEED_FIXED, for the mean
 };
 
 uniform uint u_num_particles;
+
+// atomicAdd has no float form here, so the sum accumulates as fixed point.
+// 100 keeps the total inside uint32 even at the MAX_SPEED cap.
+const float SPEED_FIXED = 100.0;
 
 // Non-negative floats keep their ordering as unsigned ints, so a uint atomicMax
 // over floatBitsToUint gives the exact float maximum. Both inputs are magnitudes.
@@ -25,4 +30,5 @@ void main() {
 
     atomicMax(max_speed_bits, floatBitsToUint(speeds[i]));
     atomicMax(max_accel_bits, floatBitsToUint(length(accelerations[i])));
+    atomicAdd(speed_sum_fixed, uint(speeds[i] * SPEED_FIXED));
 }

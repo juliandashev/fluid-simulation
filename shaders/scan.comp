@@ -1,8 +1,9 @@
-// Exclusive prefix sum over cell_counts. Single invocation; ~950 cells is too
-// small to be worth a parallel scan.
+// Exclusive prefix sum over cell_counts, in one workgroup: a per-thread chunk
+// scan, a shared-memory scan of the chunk totals, then propagation. Turns a
+// dependency chain of u_num_cells into one of ~log2(THREADS) + 2*chunk.
 #version 430
 
-layout(local_size_x = 1) in;
+layout(local_size_x = 256) in;
 
 layout(std430, binding = 4) buffer CellCounts {
     uint cell_counts[];
@@ -18,12 +19,46 @@ layout(std430, binding = 6) buffer CellCursors {
 
 uniform int u_num_cells;
 
-void main() {
-    uint sum = 0u;
+const uint THREADS = 256u;
 
-    for (int c = 0; c < u_num_cells; ++c) {
+shared uint s_totals[THREADS];
+
+void main() {
+    const uint tid = gl_LocalInvocationID.x;
+    const uint cells = uint(u_num_cells);
+
+    // Contiguous chunk per thread; the ceiling division leaves the last threads
+    // empty rather than short, which keeps every barrier below uniformly reached.
+    const uint per = (cells + THREADS - 1u) / THREADS;
+    const uint lo = min(tid * per, cells);
+    const uint hi = min(lo + per, cells);
+
+    // Phase 1: scan within the chunk. Writes chunk-local offsets, fixed up later.
+    uint sum = 0u;
+    for (uint c = lo; c < hi; ++c) {
         cell_starts[c] = sum;
-        cell_cursors[c] = sum;
         sum += cell_counts[c];
+    }
+
+    s_totals[tid] = sum;
+    barrier();
+
+    // Phase 2: inclusive Hillis-Steele scan of the chunk totals. Uniform control
+    // flow, so every thread reaches both barriers on every iteration.
+    for (uint stride = 1u; stride < THREADS; stride <<= 1) {
+        const uint add = (tid >= stride) ? s_totals[tid - stride] : 0u;
+        barrier();
+        s_totals[tid] += add;
+        barrier();
+    }
+
+    // Inclusive to exclusive: this chunk starts where the previous one ended.
+    const uint offset = (tid == 0u) ? 0u : s_totals[tid - 1u];
+
+    // Phase 3: lift the chunk-local offsets to global ones.
+    for (uint c = lo; c < hi; ++c) {
+        const uint start = cell_starts[c] + offset;
+        cell_starts[c] = start;
+        cell_cursors[c] = start;
     }
 }

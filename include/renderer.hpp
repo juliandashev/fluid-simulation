@@ -5,6 +5,7 @@
 #include <glm/vec2.hpp>
 #include <vector>
 
+#include "color_field.hpp"
 #include "defs.hpp"
 #include "obstacle.hpp"
 #include "shader.hpp"
@@ -13,8 +14,6 @@ namespace fluid {
 namespace gl {
 
 // What the particle colour ramp maps; the sim buffer differs per field.
-enum class ColorField : int32_t { Speed, Pressure };
-
 // Owns all GPU state (VAOs, VBOs, shaders) and handles the CPU -> GPU
 // uploads + draws each frame. Requires a current GL context.
 class Renderer {

@@ -30,6 +30,10 @@ constexpr float_t INTERACTION_RADIUS = 30.0f;
 constexpr float_t PRESSURE_MULTIPLIER = 1'800.0f;  // k (gas constant)
 constexpr float_t VISCOSITY = 3.14f;
 constexpr float_t GRAVITY = -9.81f;
+// Wing chord as a fraction of the domain height. Lives here rather than in
+// wing.hpp so SimParams can default from it without inverting the include.
+constexpr float_t WING_CHORD_FRAC = 0.75f;
+
 constexpr float_t SURFACE_TENSION = 0.0f;            // color-field detection threshold
 constexpr float_t SURFACE_TENSION_STRENGTH = 20.0f;  // 0 = off
 constexpr float_t COHESION_STRENGTH = 6.0f;          // Akinci pairwise cohesion
@@ -125,6 +129,9 @@ struct SimParams {
     float_t body_accel_x = 0.0f;  // drives the periodic channel; zero elsewhere
     float_t target_speed = 0.0f;  // 0 = constant drive; else the drive eases off here
     float_t wing_aoa_deg = 8.0f;  // rebuilt when changed; wing scene only
+    float_t wing_chord_frac = WING_CHORD_FRAC;  // same; chord as a fraction of domain height
+    float_t blow_speed = 40.0f;   // target speed inside the cursor in blow mode
+    float_t render_smoothing = 1.6f;  // h_vis / h; a view knob, never seen by the solver
     float_t draw_scale = 1.0f;    // dot size as a fraction of the lattice pitch
     float_t pressure_min = PRESSURE_COLOR_MIN;  // narrow the band to see small
     float_t pressure_max = PRESSURE_COLOR_MAX;  // deviations around ambient

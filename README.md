@@ -119,17 +119,58 @@ recovers fully downstream of the throat while pressure does not - that asymmetry
 is the viscous loss, and in ideal flow both would be symmetric.
 
 `--experiment wing` is the same machinery without a duct: a NACA 0018 section in
-a gas filling the whole domain, periodic in x and driven by a body force with a
-governor, since free-slip domain walls leave nothing to balance a constant drive.
-The angle of attack is a panel field - moving it rebuilds the section, its
-boundary particles and their grid in place, without disturbing the flow. It is a
-demonstration rather than a result: at accessible resolutions the smoothing
-length is comparable to the section thickness, so there is no trailing edge sharp
-enough to set the Kutta condition, and without circulation there is no lift to
-measure. A sweep at n_x = 50 put the mean pressure above and below the section
-within 0.3% of each other. What it does show is bluff-body behaviour once the
-angle is large - a stagnation region on the windward face and a separated
-low-pressure wake - which needs no circulation and is visible at any resolution.
+a gas filling the whole domain, periodic in x. Angle of attack and chord are
+panel fields - moving either rebuilds the section, its boundary particles and
+their grid in place, without disturbing the gas.
+
+Circulation is out of reach: at accessible resolutions the smoothing length is
+comparable to the section thickness, so there is no trailing edge sharp enough to
+set the Kutta condition, and without circulation there is no lift. A sweep at
+n_x = 50 put the mean pressure above and below the section within 0.3% of each
+other. Growing the chord is the cheap half of that ratio - it costs no timestep
+and no fluid particles, where refining `n_x` costs `n_x³` - and takes the section
+from 1.07 h thick to 1.84 h, but ~10 h is what a resolvable trailing edge wants.
+
+So the scene starts still, and the lift asymmetry is **imposed rather than
+grown**. `B` turns the mouse drag into a directional jet: the same
+velocity-targeting interaction the pull already used, aimed along a fixed
+direction instead of at the cursor. Held over the upper surface it forces the
+flow asymmetry that circulation would otherwise have to build, and the pressure
+field responds - measured over a 60 s run, mean pressure above the section runs
+137 to 481 below the gas underneath it, at every sample and never with the wrong
+sign. That is the pressure difference lift is made of, obtained without the
+resolution a Kutta condition needs, and it is a demonstration rather than a
+measurement: nothing here integrates a force over the surface.
+
+The free-stream version is still there (`body force x` and `target speed` in the
+panel), and shows bluff-body behaviour once the angle is large - a stagnation
+region on the windward face and a separated low-pressure wake - which needs no
+circulation either.
+
+**Three defects this scene surfaced**, all of which looked like solver problems
+and were not:
+
+- **The governor watched the wrong number.** A body force in a periodic domain
+  with free-slip walls has nothing to balance it, so the drive eases off as the
+  flow approaches a target. Governing on the *maximum* speed meant the handful of
+  particles accelerating around the section's shoulders - exactly the ones that
+  are supposed to be fast - drove the throttle to 0.005 and cut the body force to
+  0.030 of 6.0 for all 4840. The bulk then coasted while the wake lost momentum
+  to the surface and wrapped around as its own inflow. Governing on the mean
+  gives a real equilibrium: bulk at 19.6 of a 20 target, drive steady at 0.124.
+- **The gas spawned 13% over-dense**, and the startup transient drove particles
+  through the section's surface - twelve of them within 0.3 s, pushed 2.4 dx deep
+  and then stuck, because deep inside the solids surround a particle symmetrically
+  and the pressure *gradient* cancels. `N·dx²` has to match the area the gas
+  actually gets; since `dx = W/n_x` and `N ∝ n_x²` that product depends only on
+  `COLUMN_WIDTH`, so 105 → 102 fixes it at every resolution. Intrusion went from
+  8-14 permanent to 0-1 transient at 0.17 dx.
+- **The trailing edge had no boundary particles at all.** `to_particles` lays
+  solids on the lattice at pitch `dx`; where the section thins below that,
+  nothing lands inside it, and the fluid pours through a wall that is not there.
+  It now also walks the polygon outline, keeping a sample only where nothing sits
+  within `0.8 dx` already - so the thick part keeps its lattice packing exactly
+  and only the starved edges gain particles.
 
 **Resolution.** Every length and mass derives from one integer and one length,
 built into a `Resolution` at startup rather than fixed at compile time, so a
@@ -143,25 +184,55 @@ the physical problem.
 **Interaction & tooling.** Drag with the mouse to push or pull the fluid,
 pause and step/rewind through a GPU-resident history buffer, and tune the
 physics live - gravity, pressure, rest density, viscosity, tension,
-cohesion, timestep, and time scale - through a Dear ImGui panel. `P` switches
-the particle colouring between speed and pressure; the pressure view reads the
-same Tait EOS the solver runs on, so the field driving the motion is visible
-rather than only its result. Its range is a pair of panel fields: a wing perturbs
-the pressure by a few percent of ambient, which a full-scale ramp hides entirely.
+cohesion, timestep, and time scale - through a Dear ImGui panel. `S` and `P`
+select speed or pressure colouring; the pressure view reads the same Tait EOS
+the solver runs on, so the field driving the motion is visible rather than only
+its result. Its range is a pair of panel fields, because the useful band is
+scene-specific: a wing perturbs the pressure by a few percent of ambient and the
+pipe's throat drop spans 400-700, either of which a full-scale ramp flattens
+into one hue. A colour-bar legend shows the active range, drawn with the same
+`√t` warp the shader applies so the tick labels sit at the colours they name.
+
+The band is worth more care than it looks: it decides whether a real effect is
+visible at all, and it has to bracket the range the fluid occupies *in the state
+being watched*, not at spawn. The wing alone has four such states - spawned,
+settled still, under a free stream, and under the jet - whose pressures sit near
+700, 700, 490 and 20-500. Every wrong choice reads as "the physics is not
+happening": the pipe's 40% throat drop hid inside two adjacent hues at 0-1000,
+and the jet's measured 137-481 asymmetry clamped entirely to blue under a band
+centred on ambient.
+
+**Reconstructed field.** `F` swaps the particle view for an Eulerian read-out:
+the SPH interpolant `Σ (m_j/ρ_j) A_j W(r - r_j, h_vis)` evaluated on a fixed
+grid rather than at the particles, rendered as a smooth colour map. Averaging
+~45 neighbours per sample suppresses the per-particle pressure scatter that
+weakly-compressible SPH inherently carries - `p ~ ρ⁴` turns sub-percent density
+noise into several percent on pressure. The render smoothing length is a panel
+field independent of the solver's `h`, and pressure is interpolated rather than
+recomputed from an interpolated density, since the EOS is convex and the two
+differ. The Shepard denominator doubles as a coverage test, so solid geometry
+and the region outside the fluid blank themselves. Nothing here feeds back into
+the solver: it is a view, and the measurements stay Lagrangian.
 
 ### Working on now
 
 Applications, on top of the validation. The solver now selects a scene from the
 command line (`--experiment`, `--help` lists them), and solid geometry inside the
 domain is built from boundary particles, so a scene is a set of quads plus a
-table row. That gave the periodic pipe above, which is the first result that is
-not a benchmark reproduction: a textbook law recovered from a solver that was
-never told about it. The runtime particle count that was blocking a convergence
-study is done, so that study is now a matter of running it. The wing is the
-open end: it needs enough resolution to carry circulation, and a force
-accumulator on the boundary particles before lift is a number rather than a
-picture. XSPH would separately suppress the particle layering the pressure view
-makes visible.
+table row, selectable at runtime from a menu that rebuilds the scene in place.
+That gave the periodic pipe above, which is the first result that is not a
+benchmark reproduction: a textbook law recovered from a solver that was never
+told about it. The runtime particle count that was blocking a convergence study
+is done, so that study is now a matter of running it. The wing shows the pressure
+asymmetry now that the jet imposes it, but lift is still a picture rather than a
+number: that needs a force accumulator over the boundary particles, which is the
+next thing worth building there.
+
+The particle layering the pressure view makes visible is a separate thread. The
+field reconstruction hides it without addressing it. Of the fixes in the
+literature, δ-SPH density diffusion [12] targets the acoustic noise and particle
+shifting [13] targets the anisotropic packing; XSPH smooths velocity only, and
+the DualSPHysics maintainers treat it as superseded by the other two.
 
 Underneath that, quantitative validation rather than new physics. The dam break
 gives a curve with a known shape to compare against, which turns "it looks like
@@ -263,6 +334,36 @@ Measured on a 2013-era ultrabook - no discrete GPU:
 Each frame runs the full pipeline twice (RK2), so one frame = two grid
 rebuilds, two density passes, and two force passes over every particle.
 
+**What sets the frame rate.** A step of the pipe scene - 4,840 fluid plus 3,812
+boundary particles - costs ~5 ms on this hardware. The frame loop drains a
+real-time accumulator in `dt` increments, so it stays smooth only while
+
+```
+cost_per_step < dt / time_scale
+```
+
+`dt` is acoustic-CFL limited at `0.25 h / c ≈ 0.0094`, which puts the threshold
+at 4.7 ms for `time_scale = 2` - just under the measured cost, so the pipe was
+pinning `MAX_SUBSTEPS` and running at 18 fps while delivering 1.57 simulated
+seconds per wall second. At `time_scale = 1.25` it holds 1.25 exactly at 47 fps.
+The scene sets its own value for this reason; the wing, with 56 boundary
+particles and a coarser grid, keeps 2.0 at 50 fps. Raising `time_scale` past the
+threshold buys no simulated time at all - it only converts frame rate into
+nothing.
+
+Refinement costs more than it looks: `N ∝ n_x²` and `dt ∝ h ∝ 1/n_x`, so work
+per simulated second goes as `n_x³`. Measured, `-n 88` runs at 0.31 simulated
+seconds per wall second against 1.25 at `-n 44`.
+
+Two startup/step costs were removed along the way. `fill_region` tested every
+candidate lattice point against every boundary particle, which for the pipe's
+3,812 solids took 2.1 s at spawn; bucketing the solids into a grid sized to the
+exclusion radius made it `O(lattice + solids)` and dropped every scene to 0.53 s,
+spawning bit-identical particles. The counting sort's prefix scan ran on a single
+GPU invocation; it is now a workgroup-wide chunk-scan, verified to produce
+identical `cell_starts` across grids from 84 to 11,972 cells, and worth ~12% on
+the larger grids where the serial chain actually bit.
+
 ## Tech stack
 
 - **C++17**
@@ -325,56 +426,28 @@ project root.
 The compiled binary is placed in `bin/`:
 
 ```bash
-./bin/fluid_simulation
+./bin/fluid_simulation                       # sandbox, interactive
+./bin/fluid_simulation --experiment pipe     # or -e; --help lists the scenes
+./bin/fluid_simulation -e wing -n 66         # -n overrides the scene's resolution
 ```
 
-**Controls:**
+Scenes are also switchable at runtime with `E`, which rebuilds the simulation in
+place - each brings its own resolution and panel defaults, so nothing carries
+over.
+
+Both the startup banner and an on-screen strip list the keys, generated from
+the same binding table that dispatches them, so neither can fall behind:
 
 - **Left / right mouse** - pull/push the fluid to/from the center of the cursor within a given radius
 - **Space** - pause and resume
 - **Left / right arrow** - step back/forward while *paused*
-- **R** - reset the scene
+- **R** - respawn the scene
+- **H** - show/hide the parameter panel (hidden by default)
+- **E** - show/hide the experiment menu; picking one rebuilds the scene in place
+- **F** - switch between particles and the reconstructed field
+- **B** - drag blows a jet along +x instead of pulling toward the cursor
+- **S** / **P** - colour by speed / pressure; the same key again returns to plain fluid
 - **Esc** - quit
-
-## Project structure
-
-```
-src/
-  main.cc          - window/context setup, frame loop, adaptive-dt CFL clamp
-  experiment.cc    - scene registry + command-line selection
-  simulation.cc    - owns all GPU buffers + shaders, dispatches the pipeline
-  renderer.cc      - draws particles straight from the simulation's buffers
-  shader.cc        - RAII OpenGL shader-program wrapper (graphics + compute)
-  debug_gui.cc     - RAII Dear ImGui wrapper for the live parameter panel
-include/
-  defs.hpp         - tunable constants + live-tunable SimParams
-  simulation.hpp   - Simulation class interface
-  history.hpp      - GPU-resident ring buffer of past states for rewind
-  input.hpp        - keyboard/mouse polling helpers
-  experiment.hpp   - the scene enum and its table
-  obstacle.hpp     - geometry primitives: quads, polygons, lattice filling
-  dam_break.hpp    - surge-front criterion, benchmark logging, the bed block
-  pipe.hpp         - periodic channel with a throat, and its duct profile
-  wing.hpp         - NACA 00xx section, sized as a fraction of the domain
-  profile.hpp      - x-binned duct profiling, over any Duct
-  (+ headers for the .cc files above)
-shaders/
-  count.comp       - counting sort 1/3: histogram of particles per cell
-  scan.comp        - counting sort 2/3: prefix sum over cell counts
-  scatter.comp     - counting sort 3/3: write sorted particle indices
-  density.comp     - density gather over the 3×3 neighbourhood + wall images
-  force.comp       - pressure, viscosity, cohesion, tension, wall images
-  midpoint.comp    - RK2 stage 1: build the half-step state
-  step.comp        - RK2 stage 2: final advance, boundaries, velocity cap
-  reduce_max.comp  - max speed/acceleration reduction for the adaptive dt
-  particle.vert/.frag - point-sprite rendering, coloured by speed or pressure
-  line.vert/.frag  - debug line/circle rendering
-external/glad/     - bundled OpenGL loader
-experiments/       - reduction script and the sweep write-up
-media/plots/       - gnuplot scripts for the four SPH kernels
-CMakeLists.txt     - top-level build (fetches GLFW/GLM/ImGui, builds GLAD)
-run.sh             - build helper functions
-```
 
 ## Physics overview
 
@@ -479,6 +552,17 @@ visibly.
 - [11] P. W. Cleary, J. J. Monaghan - *Conduction Modelling Using Smoothed
   Particle Hydrodynamics*, Journal of Computational Physics 148, 1999 - the
   pairwise-antisymmetric heat conduction form planned for thermal transport.
+- [12] D. Molteni, A. Colagrossi - *A Simple Procedure to Improve the Pressure
+  Evaluation in Hydrodynamic Context Using the SPH*, Computer Physics
+  Communications 180, 2009; refined by M. Antuono, A. Colagrossi, S. Marrone -
+  *Numerical Diffusive Terms in Weakly-Compressible SPH Schemes*, Computer
+  Physics Communications 183, 2012 - the density-diffusion term (δ ≈ 0.1) that
+  damps the pressure noise the reconstructed field currently only hides.
+- [13] S. J. Lind, R. Xu, P. K. Stansby, B. D. Rogers - *Incompressible Smoothed
+  Particle Hydrodynamics for Free-Surface Flows*, Journal of Computational
+  Physics 231, 2012; A. Skillen, S. Lind, P. K. Stansby, B. D. Rogers -
+  *Incompressible SPH with Reduced Temporal Noise*, CMAME 265, 2013 - particle
+  shifting, the remedy for anisotropic packing under shear.
 
 **Further reading** (consulted, not directly used):
 
